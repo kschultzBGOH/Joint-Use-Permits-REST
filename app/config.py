@@ -44,7 +44,7 @@ POLE_Y_COLUMN = _env("POLE_Y_COLUMN", "Y")
 
 # Local Qwen3-VL model directory, used to visually read pole ID labels on
 # pages the native-text pass couldn't match.
-QWEN_MODEL_DIR = Path(_env("QWEN_MODEL_DIR", "./models/qwen3-vl"))
+QWEN_MODEL_DIR = Path(_env("QWEN_MODEL_DIR", r"C:\PoleScan\models\Qwen3-VL-8B-Instruct"))
 
 # Visual readings below this confidence are discarded before catalog matching.
 MINIMUM_CANDIDATE_CONFIDENCE = _env_float("MINIMUM_CANDIDATE_CONFIDENCE", 0.80)
