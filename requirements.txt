@@ -1,10 +1,15 @@
-# Install these into PoleScan's OWN Python environment (the Anaconda
-# environment that already has torch, transformers, arcgis, numpy,
-# pymupdf, and pillow -- see PoleScan's INSTALL.txt). Do NOT install
-# PoleScan's dependencies here; this service imports PoleScan's code
-# in-process and needs to run inside that same environment, not a
-# separate one.
-
 fastapi~=0.115
 uvicorn[standard]~=0.32
 python-multipart~=0.0.12
+arcgis~=2.4
+
+# Pole discovery (app/discovery/)
+pymupdf~=1.28.0
+pillow~=10.4
+transformers
+
+# torch is deliberately left unpinned here -- install the CUDA-matched
+# build for your GPU/driver from https://pytorch.org/get-started/locally/
+# BEFORE running `pip install -r requirements.txt`, or a plain `pip
+# install torch` may pull a CPU-only wheel.
+torch

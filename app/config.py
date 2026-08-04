@@ -1,10 +1,8 @@
 """Environment-driven configuration for the Joint Use Permits REST API.
 
-All values are read from environment variables (see .env.example). Nothing
-here is auto-detected -- this service imports and runs PoleScan's pipeline
-in-process (see polescan_pipeline.py), so it must itself run inside
-PoleScan's own configured environment: torch, transformers, arcgis, numpy,
-pymupdf, and pillow already installed (see PoleScan's INSTALL.txt).
+All values are read from environment variables (see .env.example). This
+service is self-contained -- it runs its own PDF/pole-discovery pipeline
+(see app/discovery/) rather than depending on any other project.
 """
 
 from __future__ import annotations
@@ -22,22 +20,36 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    return float(value) if value else default
+
+
 # ---------------------------------------------------------------------------
-# PoleScan pipeline
+# Pole discovery (app/discovery/)
 # ---------------------------------------------------------------------------
 
-# Path to the PoleScan project checkout (contains the polescan/ package).
-# Inserted onto sys.path so `import polescan...` resolves from here --
-# see polescan_pipeline.py.
-POLESCAN_PROJECT_DIR = Path(_env("POLESCAN_PROJECT_DIR", r"C:\PoleScan"))
+# Directory this service uses to stage uploaded plan set PDFs.
+UPLOAD_DIR = Path(_env("UPLOAD_DIR", "./uploads"))
 
-# Directory this service uses to stage uploaded PDFs before handing them to
-# PoleScan's pipeline.
-UPLOAD_DIR = Path(_env("UPLOAD_DIR", str(POLESCAN_PROJECT_DIR / "uploads")))
+# Authoritative pole reference database (SQLite). Column/table names are
+# configurable since the schema belongs to whatever system maintains it,
+# not this service.
+POLE_DB_PATH = Path(_env("POLE_DB_PATH", "./pole_reference.sqlite"))
+POLE_TABLE = _env("POLE_TABLE", "Poles")
+POLE_ID_COLUMN = _env("POLE_ID_COLUMN", "PoleID")
+POLE_X_COLUMN = _env("POLE_X_COLUMN", "X")
+POLE_Y_COLUMN = _env("POLE_Y_COLUMN", "Y")
 
-# This service never calls PoleScan's own write_gis_outputs -- it creates
-# Joint Use Permits' features itself (see permit_creation.py). PoleScan's
-# GIS_OUTPUT_TARGETS setting has no effect on anything this service does.
+# Local Qwen vision-language model directory, used to visually read pole ID
+# labels on pages the native-text pass couldn't match.
+QWEN_MODEL_DIR = Path(_env("QWEN_MODEL_DIR", "./models/qwen3-vl"))
+
+# DPI used when rendering a PDF page to an image for the vision model.
+VISUAL_RENDER_DPI = _env_int("VISUAL_RENDER_DPI", 200)
+
+# Visual readings below this confidence are discarded before catalog matching.
+MINIMUM_CANDIDATE_CONFIDENCE = _env_float("MINIMUM_CANDIDATE_CONFIDENCE", 0.80)
 
 # ---------------------------------------------------------------------------
 # ArcGIS Portal
@@ -54,9 +66,9 @@ WORK_AREAS_LAYER_ITEM_ID = _env(
 )
 
 # Matches scripts/create_layers.py's WKID in the Joint-Use-Permits repo
-# (NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet), and PoleScan's own
-# POLE_COORDINATE_WKID. Pole x/y from pole_discovery.json are already in
-# this spatial reference.
+# (NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet). The pole catalog's x/y
+# must already be in this spatial reference -- this service does not
+# reproject them.
 POLE_COORDINATE_WKID = _env_int("POLE_COORDINATE_WKID", 3734)
 
 # Feet (this WKID's linear unit) to buffer around the discovered pole

@@ -1,5 +1,5 @@
 """Creates a new permit (JointUsePermits_WorkAreas) and its poles
-(JointUsePermits_Poles) from a PoleScan discovery result.
+(JointUsePermits_Poles) from a pole discovery result (see app/discovery/).
 
 Field names here must match scripts/create_layers.py in the
 Joint-Use-Permits repo -- that script is the source of truth for both
@@ -144,11 +144,11 @@ def create_permit_and_poles(
                     POLE_FIELDS["permit_globalid"]: permit_global_id,
                     POLE_FIELDS["permit_number"]: permit_number,
                     POLE_FIELDS["pole_id"]: pole["pole_id"],
-                    # PoleScan only matches readings against the city's own
-                    # authoritative pole catalog, so every pole it discovers
-                    # is city-owned. Foreign-owned poles aren't something
-                    # PoleScan can detect -- that count stays manual, filled
-                    # in later on the permit form.
+                    # This pipeline only matches readings against the city's
+                    # own authoritative pole catalog, so every pole it
+                    # discovers is city-owned. Foreign-owned poles aren't
+                    # something it can detect -- that count stays manual,
+                    # filled in later on the permit form.
                     POLE_FIELDS["pole_owner"]: "City",
                 },
             }

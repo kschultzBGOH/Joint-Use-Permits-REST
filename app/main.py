@@ -6,26 +6,26 @@ widget repo's restApiService.ts and README:
     POST /jobs                multipart/form-data, field "file" = plan set PDF
     GET  /jobs/{job_id}       poll for status/result
 
-Submitting a job runs PoleScan's discovery pipeline against the PDF,
-derives a work-area polygon from the discovered pole locations, and creates
-the permit + its poles directly in the Joint Use Permits hosted layers.
+Submitting a job runs this service's own pole-discovery pipeline
+(app/discovery/) against the PDF, derives a work-area polygon from the
+discovered pole locations, and creates the permit + its poles directly in
+the Joint Use Permits hosted layers.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
+from .discovery.pipeline import DiscoveryError, discover_poles
 from .gis_connection import get_gis
 from .job_store import job_store
 from .permit_creation import PermitCreationError, create_permit_and_poles
-from .polescan_pipeline import PoleScanPipelineError, run_discovery
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -84,12 +84,12 @@ def get_job(job_id: str) -> dict:
 
 def _process_job(job_id: str, pdf_path: Path) -> None:
     job_store.set_processing(job_id)
-    logger.info("Job %s: running PoleScan discovery on %s", job_id, pdf_path)
+    logger.info("Job %s: discovering poles in %s", job_id, pdf_path)
 
     try:
-        discovery_result = run_discovery(pdf_path)
+        discovery_result = discover_poles(pdf_path)
         logger.info(
-            "Job %s: PoleScan discovery status=%s, accepted_poles=%s",
+            "Job %s: discovery status=%s, accepted_poles=%s",
             job_id,
             discovery_result.get("status"),
             discovery_result.get("accepted_pole_count"),
@@ -105,7 +105,7 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
             permit.pole_count,
         )
 
-    except (PoleScanPipelineError, PermitCreationError) as exc:
+    except (DiscoveryError, PermitCreationError) as exc:
         logger.error("Job %s failed: %s", job_id, exc)
         job_store.set_failed(job_id, str(exc))
 

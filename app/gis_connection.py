@@ -1,6 +1,5 @@
 """Cached ArcGIS Portal connection, matching the auth conventions used by
-Joint-Use-Permits/scripts/create_layers.py and PoleScan's own hosted output
-(GIS_PORTAL_AUTH_MODE=pro/profile)."""
+Joint-Use-Permits/scripts/create_layers.py (GIS_PORTAL_AUTH_MODE=pro/profile)."""
 
 from __future__ import annotations
 
