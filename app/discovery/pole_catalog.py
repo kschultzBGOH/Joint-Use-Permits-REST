@@ -10,15 +10,17 @@ that lives in candidate_resolver.py.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
 from .. import config
+
+logger = logging.getLogger(__name__)
 
 
 class PoleRecord(TypedDict):
@@ -82,6 +84,8 @@ def load_pole_records(source_config: PoleSourceConfig) -> list[Mapping[str, obje
     connection.row_factory = sqlite3.Row
 
     try:
+        _validate_configured_columns(connection, source_config)
+
         query = _build_select_query(source_config)
         cursor = connection.execute(query)
 
@@ -162,7 +166,31 @@ class PoleCatalog:
             x_column=config.POLE_X_COLUMN,
             y_column=config.POLE_Y_COLUMN,
         )
-        return cls(load_pole_records(source_config))
+        catalog = cls(load_pole_records(source_config))
+
+        with_coordinates = sum(
+            1 for record in catalog.records if record["x"] is not None and record["y"] is not None
+        )
+        logger.info(
+            "Loaded pole catalog from %s (%s.%s): %s records, %s unique IDs, "
+            "%s with usable coordinates.",
+            config.POLE_DB_PATH,
+            config.POLE_TABLE,
+            config.POLE_ID_COLUMN,
+            catalog.record_count,
+            len(catalog.get_all_ids()),
+            with_coordinates,
+        )
+
+        if with_coordinates == 0:
+            raise PoleCatalogError(
+                f"No record in {config.POLE_TABLE!r} has usable coordinates in "
+                f"{config.POLE_X_COLUMN!r}/{config.POLE_Y_COLUMN!r}. Discovered poles "
+                f"cannot be placed and no work area can be built. Confirm those are "
+                f"the correct coordinate columns and that they contain values."
+            )
+
+        return catalog
 
     def __len__(self) -> int:
         return len(self._records)
@@ -170,6 +198,12 @@ class PoleCatalog:
     @property
     def record_count(self) -> int:
         return len(self._records)
+
+    @property
+    def records(self) -> tuple[PoleRecord, ...]:
+        """All records in their original load order."""
+
+        return self._records
 
     def exact_matches(self, candidate: str) -> tuple[PoleRecord, ...]:
         normalized = normalize_pole_id(str(candidate or "").strip())
@@ -200,6 +234,75 @@ class PoleCatalog:
             "duplicate_pole_id_count": len(self._duplicate_ids),
             "duplicate_source_id_count": len(self._duplicate_source_ids),
         }
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    table_row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND lower(name) = lower(?)",
+        (table,),
+    ).fetchone()
+
+    if table_row is None:
+        available = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table','view') "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        names = ", ".join(str(row["name"]) for row in available)
+        raise PoleCatalogError(
+            f"Pole reference table or view {table!r} was not found. "
+            f"Available: {names or 'none'}"
+        )
+
+    actual_table = str(table_row["name"])
+    return [
+        str(row["name"])
+        for row in connection.execute(f'PRAGMA table_info("{actual_table}")').fetchall()
+    ]
+
+
+def _validate_configured_columns(
+    connection: sqlite3.Connection, source_config: PoleSourceConfig
+) -> None:
+    """Fails loudly when a configured column doesn't exist.
+
+    Without this, a wrong or blank column name produces `NULL AS x` in the
+    select (or a raw SQLite error deep in the query), which surfaces much
+    later as "no poles with coordinates" -- far from the actual cause.
+    """
+
+    available = _table_columns(connection, source_config.table)
+    available_lower = {column.lower() for column in available}
+
+    configured = {
+        "POLE_ID_COLUMN": source_config.pole_id_column,
+        "POLE_SOURCE_ID_COLUMN": source_config.source_id_column,
+        "POLE_X_COLUMN": source_config.x_column,
+        "POLE_Y_COLUMN": source_config.y_column,
+        "POLE_STATUS_COLUMN": source_config.status_column,
+        "POLE_UPDATED_COLUMN": source_config.updated_at_column,
+    }
+
+    missing = [
+        f"{setting}={column!r}"
+        for setting, column in configured.items()
+        if column and column.lower() not in available_lower
+    ]
+
+    if missing:
+        raise PoleCatalogError(
+            f"Configured columns not found in {source_config.table!r}: "
+            f"{', '.join(missing)}. Available columns: {', '.join(available)}"
+        )
+
+    # Coordinates aren't optional for this service's purpose: without them a
+    # discovered pole can't be placed and no work area can be built. Catch a
+    # blank/unset coordinate column here rather than after a full Qwen run.
+    if not source_config.x_column or not source_config.y_column:
+        raise PoleCatalogError(
+            "POLE_X_COLUMN and POLE_Y_COLUMN must both be set -- discovered "
+            "poles need coordinates to place features and build a work area. "
+            f"Available columns in {source_config.table!r}: {', '.join(available)}"
+        )
 
 
 def _build_select_query(source_config: PoleSourceConfig) -> str:

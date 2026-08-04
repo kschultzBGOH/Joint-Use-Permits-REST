@@ -25,7 +25,17 @@ ENV_FILE_LOADED = load_dotenv(ENV_FILE)
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default).strip()
+    """Reads a setting, falling back to the default when unset OR blank.
+
+    Treating blank as "use the default" matters: .env.example uses blank
+    values to mean "leave this alone" (e.g. UPLOAD_DIR=), and a blank
+    column name silently turns into `NULL AS x` in the pole-catalog query,
+    which produces coordinate-less poles rather than an obvious error.
+    Matches _env_int/_env_float's behavior.
+    """
+
+    value = os.environ.get(name, "").strip()
+    return value or default
 
 
 def _env_int(name: str, default: int) -> int:
