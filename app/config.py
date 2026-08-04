@@ -1,9 +1,10 @@
 """Environment-driven configuration for the Joint Use Permits REST API.
 
 All values are read from environment variables (see .env.example). Nothing
-here is auto-detected -- this service runs on the same machine as a fully
-configured PoleScan environment (CUDA, PyTorch, Qwen, ArcPy, the ArcGIS API
-for Python) and needs to be told exactly where things are.
+here is auto-detected -- this service imports and runs PoleScan's pipeline
+in-process (see polescan_pipeline.py), so it must itself run inside
+PoleScan's own configured environment: torch, transformers, arcgis, numpy,
+pymupdf, and pillow already installed (see PoleScan's INSTALL.txt).
 """
 
 from __future__ import annotations
@@ -25,31 +26,18 @@ def _env_int(name: str, default: int) -> int:
 # PoleScan pipeline
 # ---------------------------------------------------------------------------
 
-# Path to the PoleScan project checkout (contains main.py).
+# Path to the PoleScan project checkout (contains the polescan/ package).
+# Inserted onto sys.path so `import polescan...` resolves from here --
+# see polescan_pipeline.py.
 POLESCAN_PROJECT_DIR = Path(_env("POLESCAN_PROJECT_DIR", r"C:\PoleScan"))
 
-# Python executable inside PoleScan's configured environment (CUDA/ArcPy/arcgis).
-POLESCAN_PYTHON_EXECUTABLE = _env("POLESCAN_PYTHON_EXECUTABLE", "python")
-
-# Matches PoleScan's own JOBS_DIR default -- override if PoleScan's .env
-# points JOBS_DIR somewhere else.
-POLESCAN_JOBS_DIR = Path(
-    _env("POLESCAN_JOBS_DIR", str(POLESCAN_PROJECT_DIR / "jobs"))
-)
-
 # Directory this service uses to stage uploaded PDFs before handing them to
-# PoleScan's CLI.
+# PoleScan's pipeline.
 UPLOAD_DIR = Path(_env("UPLOAD_DIR", str(POLESCAN_PROJECT_DIR / "uploads")))
 
-# Seconds to wait for one PoleScan pipeline run before giving up.
-PIPELINE_TIMEOUT_SECONDS = _env_int("PIPELINE_TIMEOUT_SECONDS", 20 * 60)
-
-# IMPORTANT: this service creates its own Joint Use Permits features
-# directly (see permit_creation.py). If PoleScan's own .env has
-# GIS_OUTPUT_TARGETS set, main.py will *also* write to PoleScan_Poles as a
-# side effect of running discovery. Leave GIS_OUTPUT_TARGETS unset in the
-# environment this service invokes main.py in, unless writing to both is
-# genuinely wanted.
+# This service never calls PoleScan's own write_gis_outputs -- it creates
+# Joint Use Permits' features itself (see permit_creation.py). PoleScan's
+# GIS_OUTPUT_TARGETS setting has no effect on anything this service does.
 
 # ---------------------------------------------------------------------------
 # ArcGIS Portal

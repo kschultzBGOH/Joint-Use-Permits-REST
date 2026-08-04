@@ -1,14 +1,14 @@
 # Joint Use Permits REST
 
 REST API behind the Joint Use Permits Experience Builder widget's "Create
-New Permit" flow. Wraps PoleScan's PDF intake/discovery pipeline and the
-ArcGIS API for Python.
+New Permit" flow. Runs PoleScan's PDF intake/discovery pipeline in-process
+and creates features via the ArcGIS API for Python.
 
 ## Status: first pass, untested against a live PoleScan/Portal environment
 
 This has not been run yet. It's built directly against PoleScan's actual
-`main.py` CLI and `pole_discovery.json` output format (verified by reading
-that code), and against the exact field names in
+pipeline modules and `pole_discovery.json` output shape (verified by
+reading that code), and against the exact field names in
 `Joint-Use-Permits/scripts/create_layers.py`. See "Open items" below for
 what still needs verifying end-to-end.
 
@@ -17,9 +17,11 @@ what still needs verifying end-to-end.
 1. `POST /jobs` (multipart, field `file`) -- accepts a plan set PDF, saves
    it, and starts background processing. Returns `{"jobId": "..."}`
    immediately (202).
-2. In the background: runs PoleScan's `main.py <pdf>` as a subprocess,
-   recovers PoleScan's own internal job ID from its logged output (`Job
-   ID: <id>`), and reads that job's `results/pole_discovery.json`.
+2. In the background: imports PoleScan's pipeline modules directly (from
+   wherever `POLESCAN_PROJECT_DIR` points) and runs the same steps
+   PoleScan's `main.py` runs -- intake, native-text discovery, visual
+   discovery -- in this same process, skipping PoleScan's own GIS output
+   step entirely. See "Why in-process, not a subprocess" below.
 3. Derives a work-area polygon by buffering a multipoint of the discovered
    poles' catalog coordinates (`WORK_AREA_BUFFER_FEET`, default 50ft) --
    this works for any pole count, including 1 or 2, without needing a
@@ -35,25 +37,48 @@ what still needs verifying end-to-end.
    `completed` (with the new permit's `objectId`/`globalId`/
    `permitNumber`/`poleCount`), or `failed` (with an error message).
 
+## Why in-process, not a subprocess
+
+The first version of this shelled out to `python main.py <pdf>` as a
+subprocess. That turned out to be the wrong call: PoleScan was built as a
+one-off proof-of-concept CLI, not something meant to be invoked as an
+external tool from a separate service/environment -- it needed a second
+Python interpreter with a matching dependency set, a hardcoded project
+path, and (since `main.py` generates its own job ID internally and doesn't
+print anything structured) recovering that ID by regexing a log line back
+out of captured output. All fragile, all avoidable.
+
+Instead, `polescan_pipeline.py` puts `POLESCAN_PROJECT_DIR` on `sys.path`
+and imports PoleScan's actual pipeline functions (`prepare_plan_job`,
+`discover_native_text`, `prepare_visual_images`, `discover_visual_poles`,
+`write_pole_discovery_result`, `load_vision_model`/`unload_vision_model`)
+directly, running the same sequence `main.py` does. This means **this
+service now runs inside PoleScan's own Python environment** -- the one
+with `torch`, `transformers`, `arcgis`, `numpy`, `pymupdf`, and `pillow`
+already installed (see PoleScan's `INSTALL.txt`) -- with
+`fastapi`/`uvicorn`/`python-multipart` additionally installed into it.
+There's no longer a "this service's environment" separate from
+"PoleScan's environment"; they're the same one. `arcpy` is not required
+here -- it's only used by `polescan.output`, which this service never
+imports (Joint Use Permits creates its own features in `permit_creation.py`
+instead of going through PoleScan's `write_gis_outputs`/`PoleScan_Poles`).
+
+Runs are serialized with a lock (`_pipeline_lock`) -- `main.py` was never
+built to run two jobs concurrently against one shared GPU/vision model, so
+this service doesn't try to either.
+
 ## Running it
 
-Requires Python in an environment with the ArcGIS API for Python
-(`arcgis`) installed, on the same machine as a working PoleScan checkout
-(CUDA/PyTorch/Qwen/ArcPy already set up per PoleScan's own
-`GIS_OUTPUT_SETUP.md`).
+Install this repo's dependencies into PoleScan's own Anaconda environment
+(the one already running PoleScan's `main.py` successfully), then run
+uvicorn from there:
 
 ```bash
+conda activate <PoleScan's environment name>
 pip install -r requirements.txt
 cp .env.example .env   # fill in POLESCAN_PROJECT_DIR etc.
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
-
-**Important:** if PoleScan's own `.env` has `GIS_OUTPUT_TARGETS` set,
-running `main.py` will *also* write discovered poles to `PoleScan_Poles`
-as a side effect -- that's a separate dataset from
-`JointUsePermits_Poles`. Leave `GIS_OUTPUT_TARGETS` unset in whatever
-environment this service invokes `main.py` in, unless writing to both is
-genuinely wanted.
 
 ## File layout
 
@@ -62,7 +87,7 @@ app/
 ├── main.py               FastAPI app: POST /jobs, GET /jobs/{id}
 ├── config.py              environment-driven settings (see .env.example)
 ├── job_store.py           in-memory job tracking (single-process only)
-├── polescan_pipeline.py    subprocess wrapper around PoleScan's main.py
+├── polescan_pipeline.py    imports and runs PoleScan's pipeline in-process
 ├── permit_creation.py      geometry, permit numbering, feature creation
 └── gis_connection.py       cached ArcGIS Portal connection
 ```
@@ -73,18 +98,16 @@ app/
    connection was available while building this -- verify the whole path
    (upload -> discovery -> permit + pole creation) against a real plan
    set before relying on it.
-2. **Job-ID recovery is log-scraping.** `polescan_pipeline.py` regexes
-   PoleScan's `Job ID: <id>` log line out of captured stdout/stderr
-   because `main.py` doesn't accept a caller-supplied job ID or print one
-   in a structured way. If PoleScan's logging format ever changes, this
-   breaks. A more robust fix would be a small change to PoleScan's
-   `main.py` to print the job ID (or write a `job_id.txt`) in a fixed,
-   parseable location.
-3. **Permit numbering isn't coordinated with the original Joint Use
+2. **Permit numbering isn't coordinated with the original Joint Use
    Permits layer** (`cad924092c44404b825dec2eef80d604`) -- it's scoped
    only to `JointUsePermits_WorkAreas`' own `PERMIT_NUMBER` values. If
    permit numbers need to be unique across both layers, this needs a
    shared counter.
+3. **Vision model reloads on every job.** `polescan_pipeline.py` loads and
+   unloads Qwen per run, matching `main.py`'s own behavior exactly. Model
+   load time is likely a meaningful chunk of each job's runtime -- keeping
+   it loaded persistently between jobs (rather than per-job) would be a
+   real perf win, at the cost of holding GPU memory continuously.
 4. **Single-process, in-memory job store.** Fine for one internal tool
    instance; would need a shared store (database, Redis) behind a load
    balancer or multiple workers.
