@@ -36,9 +36,9 @@ UPLOAD_DIR = Path(_env("UPLOAD_DIR", "./uploads"))
 # configurable since the schema belongs to whatever system maintains it,
 # not this service.
 POLE_DB_PATH = Path(_env("POLE_DB_PATH", "./pole_reference.sqlite"))
-POLE_TABLE = _env("POLE_TABLE", "Poles")
-POLE_ID_COLUMN = _env("POLE_ID_COLUMN", "PoleID")
-POLE_SOURCE_ID_COLUMN = _env("POLE_SOURCE_ID_COLUMN", "SourceID")
+POLE_TABLE = _env("POLE_TABLE", "SupportStructure")
+POLE_ID_COLUMN = _env("POLE_ID_COLUMN", "FacilityID")
+POLE_SOURCE_ID_COLUMN = _env("POLE_SOURCE_ID_COLUMN", "OBJECTID")
 POLE_X_COLUMN = _env("POLE_X_COLUMN", "X")
 POLE_Y_COLUMN = _env("POLE_Y_COLUMN", "Y")
 
