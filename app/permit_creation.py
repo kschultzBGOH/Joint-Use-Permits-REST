@@ -13,12 +13,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from arcgis.features import FeatureLayer
-from arcgis.geometry import buffer as geometry_buffer
 from arcgis.gis import GIS, Item
 
 from . import config
 from .gis_connection import get_gis
 from .job_store import CreatedPermit
+from .work_area import build_work_area_polygon
 
 logger = logging.getLogger(__name__)
 
@@ -125,37 +125,28 @@ def generate_permit_number(work_areas_layer: FeatureLayer) -> str:
     return f"{max_sequence + 1}-{year}"
 
 
-def build_work_area_geometry(gis: GIS, valid_poles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Buffers a multipoint of the discovered pole locations into a polygon.
-
-    Buffering the raw multipoint (rather than a convex hull) works for any
-    pole count, including 1 or 2, without special-casing degenerate shapes.
-    """
+def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Work-area polygon covering the discovered poles (see work_area.py)."""
 
     if not valid_poles:
         raise PermitCreationError(
             "No poles with coordinates were discovered; a work area cannot be created."
         )
 
-    multipoint = {
-        "points": [[pole["x"], pole["y"]] for pole in valid_poles],
-        "spatialReference": {"wkid": config.POLE_COORDINATE_WKID},
-    }
-
-    buffered = geometry_buffer(
-        geometries=[multipoint],
-        in_sr=config.POLE_COORDINATE_WKID,
-        distances=[config.WORK_AREA_BUFFER_FEET],
-        unit=9002,  # esriSRUnit_Foot -- POLE_COORDINATE_WKID's linear unit is feet
-        out_sr=config.POLE_COORDINATE_WKID,
-        union_results=True,
-        gis=gis,
+    points = [(float(pole["x"]), float(pole["y"])) for pole in valid_poles]
+    polygon = build_work_area_polygon(
+        points=points,
+        buffer_distance=float(config.WORK_AREA_BUFFER_FEET),
+        wkid=config.POLE_COORDINATE_WKID,
     )
 
-    if not buffered:
-        raise PermitCreationError("The geometry service did not return a buffered polygon.")
-
-    return buffered[0]
+    logger.info(
+        "Built work area from %s pole(s), buffered %sft, %s ring vertices.",
+        len(points),
+        config.WORK_AREA_BUFFER_FEET,
+        len(polygon["rings"][0]),
+    )
+    return polygon
 
 
 def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
@@ -177,7 +168,7 @@ def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
     work_areas_layer = get_layer(gis, config.WORK_AREAS_LAYER_ITEM_ID)
     poles_layer = get_layer(gis, config.POLES_LAYER_ITEM_ID)
 
-    geometry = build_work_area_geometry(gis, valid_poles)
+    geometry = build_work_area_geometry(valid_poles)
     permit_number = generate_permit_number(work_areas_layer)
 
     add_result = work_areas_layer.edit_features(
