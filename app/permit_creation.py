@@ -1,9 +1,13 @@
-"""Creates a new permit (JointUsePermits_WorkAreas) and its poles
-(JointUsePermits_Poles) from a pole discovery result (see app/discovery/).
+"""Creates a new permit (the WorkAreas layer) and its related poles (the
+Poles layer) from a pole discovery result (see app/discovery/).
 
-Field names here must match scripts/create_layers.py in the
-Joint-Use-Permits repo -- that script is the source of truth for both
-layers' schemas.
+Both layers live in one hosted feature service with a real one-to-many
+relationship between them; poles reference their permit's globalid via
+permit_globalid. Joint-Use-Permits/scripts/create_layers.py is the source
+of truth for both schemas.
+
+Field names below are the expected names; the actual names are resolved
+case-insensitively from the live layer at runtime (see resolve_fields).
 """
 
 from __future__ import annotations
@@ -23,15 +27,14 @@ from .work_area import build_work_area_polygon
 logger = logging.getLogger(__name__)
 
 WORK_AREA_FIELDS = {
-    "permit_number": "PERMIT_NUMBER",
-    "permit_globalid": "PERMIT_GLOBALID",
+    "permit_number": "permit_number",
 }
 
 POLE_FIELDS = {
-    "permit_number": "PERMIT_NUMBER",
-    "permit_globalid": "PERMIT_GLOBALID",
-    "pole_id": "POLE_ID",
-    "pole_owner": "POLE_OWNER",
+    "permit_number": "permit_number",
+    "permit_globalid": "permit_globalid",
+    "pole_id": "pole_id",
+    "pole_owner": "pole_owner",
 }
 
 
@@ -53,8 +56,8 @@ def _describe_item(item: Item) -> str:
         return "item details unavailable"
 
 
-def get_layer(gis: GIS, item_id: str) -> FeatureLayer:
-    """Fetches a layer's first sublayer, retrying once with a brand-new
+def get_layer(gis: GIS, item_id: str, layer_index: int) -> FeatureLayer:
+    """Fetches one layer of the service, retrying once with a brand-new
     connection if the first attempt fails on permissions.
 
     A permission failure here is surprising -- these items are meant to be
@@ -93,8 +96,25 @@ def get_layer(gis: GIS, item_id: str) -> FeatureLayer:
     if item is None:
         raise PermitCreationError(f"Layer item {item_id} was not found.")
 
-    logger.info("Fetched item %s as %s (%s).", item_id, _identity(gis), _describe_item(item))
-    return item.layers[0]
+    layers = item.layers
+    if layer_index >= len(layers):
+        raise PermitCreationError(
+            f"Service {item_id} has no layer at index {layer_index} "
+            f"(it has {len(layers)} layer(s): "
+            f"{', '.join(str(layer.properties.name) for layer in layers)}). "
+            f"Check WORK_AREAS_LAYER_INDEX / POLES_LAYER_INDEX."
+        )
+
+    layer = layers[layer_index]
+    logger.info(
+        "Fetched %s layer %s (%s) as %s (%s).",
+        item_id,
+        layer_index,
+        layer.properties.name,
+        _identity(gis),
+        _describe_item(item),
+    )
+    return layer
 
 
 def resolve_fields(
@@ -141,10 +161,9 @@ def resolve_fields(
 def generate_permit_number(work_areas_layer: FeatureLayer, permit_number_field: str) -> str:
     """Sequential-per-year permit number, e.g. "1338-2026".
 
-    Scoped to JointUsePermits_WorkAreas' own permit numbers -- this does
-    NOT coordinate with the original (unconfirmed-schema) Joint Use
-    Permits layer's numbering. If both layers need one shared sequence,
-    this needs to query that layer too.
+    Scoped to the WorkAreas layer's own permit numbers -- this does NOT
+    coordinate with the original (separate, unconfirmed-schema) Joint Use
+    Permits layer's numbering.
     """
 
     year = datetime.now(timezone.utc).year
@@ -205,13 +224,19 @@ def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
         pole for pole in accepted_poles if pole.get("x") is not None and pole.get("y") is not None
     ]
 
-    work_areas_layer = get_layer(gis, config.WORK_AREAS_LAYER_ITEM_ID)
-    poles_layer = get_layer(gis, config.POLES_LAYER_ITEM_ID)
+    if not config.SERVICE_ITEM_ID:
+        raise PermitCreationError(
+            "SERVICE_ITEM_ID is not configured. Run Joint-Use-Permits' "
+            "scripts/create_layers.py and put the item ID it prints in .env."
+        )
 
-    work_area_fields = resolve_fields(
-        work_areas_layer, WORK_AREA_FIELDS, "JointUsePermits_WorkAreas"
+    work_areas_layer = get_layer(
+        gis, config.SERVICE_ITEM_ID, config.WORK_AREAS_LAYER_INDEX
     )
-    pole_fields = resolve_fields(poles_layer, POLE_FIELDS, "JointUsePermits_Poles")
+    poles_layer = get_layer(gis, config.SERVICE_ITEM_ID, config.POLES_LAYER_INDEX)
+
+    work_area_fields = resolve_fields(work_areas_layer, WORK_AREA_FIELDS, "WorkAreas layer")
+    pole_fields = resolve_fields(poles_layer, POLE_FIELDS, "Poles layer")
 
     geometry = build_work_area_geometry(valid_poles)
     permit_number = generate_permit_number(work_areas_layer, work_area_fields["permit_number"])

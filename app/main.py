@@ -59,8 +59,12 @@ def log_resolved_config() -> None:
 
     logger.info("  ARCGIS_AUTH_MODE=%s", config.ARCGIS_AUTH_MODE)
     logger.info("  ARCGIS_PROFILE=%s", config.ARCGIS_PROFILE or "(unset)")
-    logger.info("  WORK_AREAS_LAYER_ITEM_ID=%s", config.WORK_AREAS_LAYER_ITEM_ID)
-    logger.info("  POLES_LAYER_ITEM_ID=%s", config.POLES_LAYER_ITEM_ID)
+    logger.info(
+        "  SERVICE_ITEM_ID=%s (WorkAreas layer %s, Poles layer %s)",
+        config.SERVICE_ITEM_ID or "(unset -- permit creation will fail)",
+        config.WORK_AREAS_LAYER_INDEX,
+        config.POLES_LAYER_INDEX,
+    )
     logger.info("  POLE_DB_PATH=%s (exists=%s)", config.POLE_DB_PATH, config.POLE_DB_PATH.exists())
     logger.info("  POLE_TABLE=%s, POLE_ID_COLUMN=%s", config.POLE_TABLE, config.POLE_ID_COLUMN)
     logger.info("  QWEN_MODEL_DIR=%s", config.QWEN_MODEL_DIR)

@@ -93,10 +93,13 @@ MAX_PDF_MB = _env_int("MAX_PDF_MB", 500)
 ARCGIS_AUTH_MODE = _env("ARCGIS_AUTH_MODE", "pro")
 ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
 
-POLES_LAYER_ITEM_ID = _env("POLES_LAYER_ITEM_ID", "579b19fe7d694112b4995d59f5572936")
-WORK_AREAS_LAYER_ITEM_ID = _env(
-    "WORK_AREAS_LAYER_ITEM_ID", "4bf5a6e4fd234f6d92d81a576ba9a8c3"
-)
+# Portal item ID of the JointUsePermits hosted feature service, which holds
+# BOTH related layers (see Joint-Use-Permits/scripts/create_layers.py):
+#   layer 0 = WorkAreas (permit record + boundary polygon)
+#   layer 1 = Poles     (related to a permit via permit_globalid)
+SERVICE_ITEM_ID = _env("SERVICE_ITEM_ID")
+WORK_AREAS_LAYER_INDEX = _env_int("WORK_AREAS_LAYER_INDEX", 0)
+POLES_LAYER_INDEX = _env_int("POLES_LAYER_INDEX", 1)
 
 # Matches scripts/create_layers.py's WKID in the Joint-Use-Permits repo
 # (NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet). The pole catalog's x/y
