@@ -8,15 +8,19 @@ layers' schemas.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from arcgis.features import FeatureLayer
 from arcgis.geometry import buffer as geometry_buffer
-from arcgis.gis import GIS
+from arcgis.gis import GIS, Item
 
 from . import config
+from .gis_connection import get_gis
 from .job_store import CreatedPermit
+
+logger = logging.getLogger(__name__)
 
 WORK_AREA_FIELDS = {
     "permit_number": "PERMIT_NUMBER",
@@ -35,10 +39,61 @@ class PermitCreationError(RuntimeError):
     """Raised when the permit or its poles can't be created."""
 
 
+def _identity(gis: GIS) -> str:
+    try:
+        return f"{gis.users.me.username}@{gis.properties.portalHostname}"
+    except Exception:
+        return "unknown identity"
+
+
+def _describe_item(item: Item) -> str:
+    try:
+        return f"owner={item.owner}, access={item.access}"
+    except Exception:
+        return "item details unavailable"
+
+
 def get_layer(gis: GIS, item_id: str) -> FeatureLayer:
-    item = gis.content.get(item_id)
+    """Fetches a layer's first sublayer, retrying once with a brand-new
+    connection if the first attempt fails on permissions.
+
+    A permission failure here is surprising -- these items are meant to be
+    readable by this service's own account -- so this doesn't silently
+    swallow it: it retries with a guaranteed-fresh connection (ruling out
+    a stale/expired token) and, if that still fails, raises an error that
+    names exactly who connected and what the item's actual sharing state
+    is, so the next failure is diagnosable from the server log alone.
+    """
+
+    try:
+        item = gis.content.get(item_id)
+    except Exception as exc:
+        if "permission" not in str(exc).lower():
+            raise
+
+        logger.warning(
+            "content.get(%s) failed as %s (%s) -- retrying with a fresh connection.",
+            item_id,
+            _identity(gis),
+            exc,
+        )
+        fresh_gis = get_gis()
+
+        try:
+            item = fresh_gis.content.get(item_id)
+        except Exception as retry_exc:
+            raise PermitCreationError(
+                f"Could not access layer item {item_id} even after reconnecting. "
+                f"Connected as {_identity(fresh_gis)}. "
+                f"First error: {exc}. Retry error: {retry_exc}. "
+                f"Confirm this account can view the item in Portal "
+                f"(My Content -> the item -> Share)."
+            ) from retry_exc
+
     if item is None:
         raise PermitCreationError(f"Layer item {item_id} was not found.")
+
+    logger.info("Fetched item %s as %s (%s).", item_id, _identity(gis), _describe_item(item))
     return item.layers[0]
 
 
@@ -103,9 +158,17 @@ def build_work_area_geometry(gis: GIS, valid_poles: list[dict[str, Any]]) -> dic
     return buffered[0]
 
 
-def create_permit_and_poles(
-    gis: GIS, discovery_result: dict[str, Any]
-) -> CreatedPermit:
+def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
+    """Connects fresh (right here, right before use) and creates the permit
+    + its poles. Discovery can take several minutes (Qwen load + inference)
+    before this ever runs -- connecting at the last possible moment, rather
+    than earlier and holding onto that connection, avoids using a
+    connection that's gone stale by the time it's actually needed.
+    """
+
+    gis = get_gis()
+    logger.info("Connected as %s for permit creation.", _identity(gis))
+
     accepted_poles = discovery_result.get("accepted_poles", [])
     valid_poles = [
         pole for pole in accepted_poles if pole.get("x") is not None and pole.get("y") is not None

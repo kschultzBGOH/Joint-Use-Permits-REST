@@ -23,7 +23,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
 from .discovery.pipeline import DiscoveryError, discover_poles
-from .gis_connection import get_gis
 from .job_store import job_store
 from .permit_creation import PermitCreationError, create_permit_and_poles
 
@@ -96,8 +95,7 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
             discovery_result.get("accepted_pole_count"),
         )
 
-        gis = get_gis()
-        permit = create_permit_and_poles(gis, discovery_result)
+        permit = create_permit_and_poles(discovery_result)
         job_store.set_completed(job_id, permit)
         logger.info(
             "Job %s: created permit %s with %s pole(s)",
