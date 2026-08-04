@@ -49,8 +49,9 @@ def health() -> dict:
 async def create_job(file: UploadFile) -> dict:
     job = job_store.create()
 
-    config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    pdf_path = config.UPLOAD_DIR / f"{job.id}.pdf"
+    job_input_dir = config.UPLOAD_DIR / job.id / "input"
+    job_input_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = job_input_dir / "source.pdf"
     pdf_path.write_bytes(await file.read())
 
     thread = threading.Thread(target=_process_job, args=(job.id, pdf_path), daemon=True)
@@ -87,7 +88,7 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
     logger.info("Job %s: discovering poles in %s", job_id, pdf_path)
 
     try:
-        discovery_result = discover_poles(pdf_path)
+        discovery_result = discover_poles(job_id, pdf_path)
         logger.info(
             "Job %s: discovery status=%s, accepted_poles=%s",
             job_id,

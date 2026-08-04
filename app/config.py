@@ -38,18 +38,18 @@ UPLOAD_DIR = Path(_env("UPLOAD_DIR", "./uploads"))
 POLE_DB_PATH = Path(_env("POLE_DB_PATH", "./pole_reference.sqlite"))
 POLE_TABLE = _env("POLE_TABLE", "Poles")
 POLE_ID_COLUMN = _env("POLE_ID_COLUMN", "PoleID")
+POLE_SOURCE_ID_COLUMN = _env("POLE_SOURCE_ID_COLUMN", "SourceID")
 POLE_X_COLUMN = _env("POLE_X_COLUMN", "X")
 POLE_Y_COLUMN = _env("POLE_Y_COLUMN", "Y")
 
-# Local Qwen vision-language model directory, used to visually read pole ID
-# labels on pages the native-text pass couldn't match.
+# Local Qwen3-VL model directory, used to visually read pole ID labels on
+# pages the native-text pass couldn't match.
 QWEN_MODEL_DIR = Path(_env("QWEN_MODEL_DIR", "./models/qwen3-vl"))
-
-# DPI used when rendering a PDF page to an image for the vision model.
-VISUAL_RENDER_DPI = _env_int("VISUAL_RENDER_DPI", 200)
 
 # Visual readings below this confidence are discarded before catalog matching.
 MINIMUM_CANDIDATE_CONFIDENCE = _env_float("MINIMUM_CANDIDATE_CONFIDENCE", 0.80)
+
+MAX_PDF_MB = _env_int("MAX_PDF_MB", 500)
 
 # ---------------------------------------------------------------------------
 # ArcGIS Portal

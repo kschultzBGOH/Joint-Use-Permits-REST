@@ -7,6 +7,8 @@ arcgis~=2.4
 pymupdf~=1.28.0
 pillow~=10.4
 transformers
+accelerate
+safetensors
 
 # torch is deliberately left unpinned here -- install the CUDA-matched
 # build for your GPU/driver from https://pytorch.org/get-started/locally/
