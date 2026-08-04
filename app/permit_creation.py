@@ -97,27 +97,67 @@ def get_layer(gis: GIS, item_id: str) -> FeatureLayer:
     return item.layers[0]
 
 
-def generate_permit_number(work_areas_layer: FeatureLayer) -> str:
+def resolve_fields(
+    layer: FeatureLayer, wanted: dict[str, str], layer_label: str
+) -> dict[str, str]:
+    """Maps logical field keys to the layer's ACTUAL field names.
+
+    Portal doesn't necessarily preserve the casing a layer was created
+    with -- these layers were defined with PERMIT_NUMBER but the hosted
+    service reports permit_number. Resolving against the live schema
+    case-insensitively means this service works regardless of how Portal
+    cased things, instead of breaking on an exact-match string compare.
+    """
+
+    try:
+        layer_fields = layer.properties.fields
+    except Exception as exc:
+        raise PermitCreationError(f"Could not read {layer_label}'s field list: {exc}") from exc
+
+    actual_by_lower: dict[str, str] = {}
+    for field in layer_fields:
+        name = field["name"] if isinstance(field, dict) else getattr(field, "name", None)
+        if name:
+            actual_by_lower[str(name).lower()] = str(name)
+
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+    for key, expected_name in wanted.items():
+        actual = actual_by_lower.get(expected_name.lower())
+        if actual is None:
+            missing.append(expected_name)
+        else:
+            resolved[key] = actual
+
+    if missing:
+        raise PermitCreationError(
+            f"{layer_label} is missing expected field(s): {', '.join(sorted(missing))}. "
+            f"Available fields: {', '.join(sorted(actual_by_lower.values()))}"
+        )
+
+    return resolved
+
+
+def generate_permit_number(work_areas_layer: FeatureLayer, permit_number_field: str) -> str:
     """Sequential-per-year permit number, e.g. "1338-2026".
 
-    Scoped to JointUsePermits_WorkAreas' own PERMIT_NUMBER values -- this
-    does NOT coordinate with the original (unconfirmed-schema) Joint Use
+    Scoped to JointUsePermits_WorkAreas' own permit numbers -- this does
+    NOT coordinate with the original (unconfirmed-schema) Joint Use
     Permits layer's numbering. If both layers need one shared sequence,
     this needs to query that layer too.
     """
 
     year = datetime.now(timezone.utc).year
-    field = WORK_AREA_FIELDS["permit_number"]
 
     result = work_areas_layer.query(
-        where=f"{field} LIKE '%-{year}'",
-        out_fields=field,
+        where=f"{permit_number_field} LIKE '%-{year}'",
+        out_fields=permit_number_field,
         return_geometry=False,
     )
 
     max_sequence = 0
     for feature in result.features:
-        value = str(feature.attributes.get(field, ""))
+        value = str(feature.attributes.get(permit_number_field, ""))
         prefix = value.split("-")[0]
         if prefix.isdigit():
             max_sequence = max(max_sequence, int(prefix))
@@ -168,14 +208,19 @@ def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
     work_areas_layer = get_layer(gis, config.WORK_AREAS_LAYER_ITEM_ID)
     poles_layer = get_layer(gis, config.POLES_LAYER_ITEM_ID)
 
+    work_area_fields = resolve_fields(
+        work_areas_layer, WORK_AREA_FIELDS, "JointUsePermits_WorkAreas"
+    )
+    pole_fields = resolve_fields(poles_layer, POLE_FIELDS, "JointUsePermits_Poles")
+
     geometry = build_work_area_geometry(valid_poles)
-    permit_number = generate_permit_number(work_areas_layer)
+    permit_number = generate_permit_number(work_areas_layer, work_area_fields["permit_number"])
 
     add_result = work_areas_layer.edit_features(
         adds=[
             {
                 "geometry": geometry,
-                "attributes": {WORK_AREA_FIELDS["permit_number"]: permit_number},
+                "attributes": {work_area_fields["permit_number"]: permit_number},
             }
         ]
     )
@@ -195,15 +240,15 @@ def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
                     "spatialReference": {"wkid": config.POLE_COORDINATE_WKID},
                 },
                 "attributes": {
-                    POLE_FIELDS["permit_globalid"]: permit_global_id,
-                    POLE_FIELDS["permit_number"]: permit_number,
-                    POLE_FIELDS["pole_id"]: pole["pole_id"],
+                    pole_fields["permit_globalid"]: permit_global_id,
+                    pole_fields["permit_number"]: permit_number,
+                    pole_fields["pole_id"]: pole["pole_id"],
                     # This pipeline only matches readings against the city's
                     # own authoritative pole catalog, so every pole it
                     # discovers is city-owned. Foreign-owned poles aren't
                     # something it can detect -- that count stays manual,
                     # filled in later on the permit form.
-                    POLE_FIELDS["pole_owner"]: "City",
+                    pole_fields["pole_owner"]: "City",
                 },
             }
             for pole in valid_poles
