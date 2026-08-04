@@ -39,6 +39,33 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def log_resolved_config() -> None:
+    """Logs the settings actually in effect.
+
+    A .env file that isn't being read is invisible otherwise -- the service
+    just quietly runs on defaults. Logging this (especially whether .env was
+    found at all) makes that immediately obvious instead of surfacing later
+    as a confusing downstream failure.
+    """
+
+    if config.ENV_FILE_LOADED:
+        logger.info("Loaded settings from %s", config.ENV_FILE)
+    else:
+        logger.warning(
+            "No .env file found at %s -- running entirely on built-in defaults.",
+            config.ENV_FILE,
+        )
+
+    logger.info("  ARCGIS_AUTH_MODE=%s", config.ARCGIS_AUTH_MODE)
+    logger.info("  ARCGIS_PROFILE=%s", config.ARCGIS_PROFILE or "(unset)")
+    logger.info("  WORK_AREAS_LAYER_ITEM_ID=%s", config.WORK_AREAS_LAYER_ITEM_ID)
+    logger.info("  POLES_LAYER_ITEM_ID=%s", config.POLES_LAYER_ITEM_ID)
+    logger.info("  POLE_DB_PATH=%s (exists=%s)", config.POLE_DB_PATH, config.POLE_DB_PATH.exists())
+    logger.info("  POLE_TABLE=%s, POLE_ID_COLUMN=%s", config.POLE_TABLE, config.POLE_ID_COLUMN)
+    logger.info("  QWEN_MODEL_DIR=%s", config.QWEN_MODEL_DIR)
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}

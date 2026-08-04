@@ -1,14 +1,27 @@
 """Environment-driven configuration for the Joint Use Permits REST API.
 
-All values are read from environment variables (see .env.example). This
-service is self-contained -- it runs its own PDF/pole-discovery pipeline
-(see app/discovery/) rather than depending on any other project.
+Values come from the repo-root .env file (see .env.example), falling back
+to the defaults below. This service is self-contained -- it runs its own
+PDF/pole-discovery pipeline (see app/discovery/) rather than depending on
+any other project.
+
+The .env file is loaded explicitly by absolute path rather than relying on
+python-dotenv's search-from-cwd behavior, so the settings apply no matter
+which directory uvicorn was launched from.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+#: Repo root (this file lives at <repo root>/app/config.py).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env"
+
+ENV_FILE_LOADED = load_dotenv(ENV_FILE)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -29,13 +42,23 @@ def _env_float(name: str, default: float) -> float:
 # Pole discovery (app/discovery/)
 # ---------------------------------------------------------------------------
 
+def _path(name: str, default: Path) -> Path:
+    """Resolves a configured path, anchoring anything relative to the repo
+    root rather than the current working directory -- so the service
+    behaves the same regardless of where uvicorn was launched from."""
+
+    value = _env(name)
+    path = Path(value) if value else default
+    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
 # Directory this service uses to stage uploaded plan set PDFs.
-UPLOAD_DIR = Path(_env("UPLOAD_DIR", "./uploads"))
+UPLOAD_DIR = _path("UPLOAD_DIR", Path("uploads"))
 
 # Authoritative pole reference database (SQLite). Column/table names are
 # configurable since the schema belongs to whatever system maintains it,
 # not this service.
-POLE_DB_PATH = Path(_env("POLE_DB_PATH", "./pole_reference.sqlite"))
+POLE_DB_PATH = _path("POLE_DB_PATH", Path("pole_reference.sqlite"))
 POLE_TABLE = _env("POLE_TABLE", "SupportStructure")
 POLE_ID_COLUMN = _env("POLE_ID_COLUMN", "FacilityID")
 POLE_SOURCE_ID_COLUMN = _env("POLE_SOURCE_ID_COLUMN", "OBJECTID")
