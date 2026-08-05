@@ -31,6 +31,7 @@ WORK_AREA_FIELDS = {
     "permit_number": "permit_number",
     "totalcitypolecount": "totalcitypolecount",
     "foreignpolecount": "foreignpolecount",
+    "polereviewstatus": "polereviewstatus",
 }
 
 POLE_FIELDS = {
@@ -44,6 +45,12 @@ POLE_FIELDS = {
 
 STATUS_APPROVED = "Approved"
 STATUS_NEEDS_REVIEW = "Needs Review"
+
+#: Every new permit starts here, regardless of individual pole confidence
+#: -- a human explicitly marks a permit "Review of Poles Complete" (the
+#: widget's Under Review tab) rather than it silently qualifying just
+#: because no single pole happened to score below the review threshold.
+PERMIT_REVIEW_STATUS_NEEDS_REVIEW = "Needs Review"
 
 
 def resolve_pole_owner(pole_id: str) -> str:
@@ -290,6 +297,7 @@ def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) ->
                     work_area_fields["permit_number"]: permit_number,
                     work_area_fields["totalcitypolecount"]: total_city_pole_count,
                     work_area_fields["foreignpolecount"]: foreign_pole_count,
+                    work_area_fields["polereviewstatus"]: PERMIT_REVIEW_STATUS_NEEDS_REVIEW,
                 },
             }
         ]
