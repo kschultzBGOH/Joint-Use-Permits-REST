@@ -22,6 +22,7 @@ class AcceptedPole(TypedDict):
     y: float | None
     discovery_sources: list[str]
     pages: list[int]
+    confidence: float
 
 
 class PoleDiscoveryResult(TypedDict):
@@ -97,8 +98,36 @@ def _build_accepted_pole(
         discovery_sources.append("visual")
 
     pages = sorted({o["page_number"] for o in (native_observations + visual_observations)})
+    confidence = _resolve_confidence(native_observations, visual_observations)
 
-    return {"pole_id": pole_id, "x": x, "y": y, "discovery_sources": discovery_sources, "pages": pages}
+    return {
+        "pole_id": pole_id,
+        "x": x,
+        "y": y,
+        "discovery_sources": discovery_sources,
+        "pages": pages,
+        "confidence": confidence,
+    }
+
+
+def _resolve_confidence(native_observations: list, visual_observations: list) -> float:
+    """Best-evidence confidence across whichever pass(es) found this pole.
+
+    Native-text matches are exact literal text extracted from the PDF, not
+    a model guess, so they carry full confidence. Visual matches carry
+    whatever the resolver settled on after homoglyph-correction penalties.
+    When a pole was found both ways, the higher confidence wins.
+    """
+
+    scores: list[float] = []
+    if native_observations:
+        scores.append(1.0)
+    for observation in visual_observations:
+        scores.append(
+            float(observation.get("resolution_confidence", observation.get("model_confidence", 0.0)))
+        )
+
+    return max(scores) if scores else 0.0
 
 
 def _resolve_coordinates(records) -> tuple[float | None, float | None]:

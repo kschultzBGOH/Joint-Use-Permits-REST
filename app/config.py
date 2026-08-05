@@ -111,6 +111,11 @@ POLE_COORDINATE_WKID = _env_int("POLE_COORDINATE_WKID", 3734)
 # locations when deriving a work-area polygon.
 WORK_AREA_BUFFER_FEET = _env_int("WORK_AREA_BUFFER_FEET", 50)
 
+# A pole's discovery confidence below this is created with status "Needs
+# Review" instead of "Approved", surfacing it on the widget's "Under
+# Review" tab for a human to accept, reject, or replace.
+POLE_REVIEW_CONFIDENCE_THRESHOLD = _env_float("POLE_REVIEW_CONFIDENCE_THRESHOLD", 0.85)
+
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------

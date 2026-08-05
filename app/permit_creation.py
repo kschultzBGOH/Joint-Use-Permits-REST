@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 WORK_AREA_FIELDS = {
     "permit_number": "permit_number",
+    "totalcitypolecount": "totalcitypolecount",
+    "foreignpolecount": "foreignpolecount",
 }
 
 POLE_FIELDS = {
@@ -36,7 +38,24 @@ POLE_FIELDS = {
     "permit_globalid": "permit_globalid",
     "pole_id": "pole_id",
     "pole_owner": "pole_owner",
+    "confidence": "confidence",
+    "status": "status",
 }
+
+STATUS_APPROVED = "Approved"
+STATUS_NEEDS_REVIEW = "Needs Review"
+
+
+def resolve_pole_owner(pole_id: str) -> str:
+    """City-owned pole IDs never end in 'F'; foreign-owned ones always do
+    (see candidate_resolver.py's terminal-F handling, which already treats
+    that suffix as meaningful when correcting OCR readings)."""
+
+    return "Foreign" if pole_id.strip().upper().endswith("F") else "City"
+
+
+def resolve_pole_status(confidence: float) -> str:
+    return STATUS_APPROVED if confidence >= config.POLE_REVIEW_CONFIDENCE_THRESHOLD else STATUS_NEEDS_REVIEW
 
 
 class PermitCreationError(RuntimeError):
@@ -259,11 +278,19 @@ def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) ->
     geometry = build_work_area_geometry(valid_poles)
     permit_number = generate_permit_number(work_areas_layer, work_area_fields["permit_number"])
 
+    pole_owners = [resolve_pole_owner(pole["pole_id"]) for pole in valid_poles]
+    total_city_pole_count = sum(1 for owner in pole_owners if owner == "City")
+    foreign_pole_count = sum(1 for owner in pole_owners if owner == "Foreign")
+
     add_result = work_areas_layer.edit_features(
         adds=[
             {
                 "geometry": geometry,
-                "attributes": {work_area_fields["permit_number"]: permit_number},
+                "attributes": {
+                    work_area_fields["permit_number"]: permit_number,
+                    work_area_fields["totalcitypolecount"]: total_city_pole_count,
+                    work_area_fields["foreignpolecount"]: foreign_pole_count,
+                },
             }
         ]
     )
@@ -286,15 +313,12 @@ def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) ->
                     pole_fields["permit_globalid"]: permit_global_id,
                     pole_fields["permit_number"]: permit_number,
                     pole_fields["pole_id"]: pole["pole_id"],
-                    # This pipeline only matches readings against the city's
-                    # own authoritative pole catalog, so every pole it
-                    # discovers is city-owned. Foreign-owned poles aren't
-                    # something it can detect -- that count stays manual,
-                    # filled in later on the permit form.
-                    pole_fields["pole_owner"]: "City",
+                    pole_fields["pole_owner"]: owner,
+                    pole_fields["confidence"]: pole.get("confidence", 0.0),
+                    pole_fields["status"]: resolve_pole_status(pole.get("confidence", 0.0)),
                 },
             }
-            for pole in valid_poles
+            for pole, owner in zip(valid_poles, pole_owners)
         ]
 
         pole_result = poles_layer.edit_features(adds=pole_adds)
