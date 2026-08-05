@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from arcgis.features import FeatureLayer
@@ -208,12 +209,29 @@ def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any
     return polygon
 
 
-def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
-    """Connects fresh (right here, right before use) and creates the permit
-    + its poles. Discovery can take several minutes (Qwen load + inference)
-    before this ever runs -- connecting at the last possible moment, rather
-    than earlier and holding onto that connection, avoids using a
-    connection that's gone stale by the time it's actually needed.
+def attach_plan_set(work_areas_layer: FeatureLayer, object_id: int, pdf_path: Path) -> None:
+    """Attaches the uploaded plan set PDF to the permit's WorkAreas feature.
+
+    This is the same PDF pole discovery just ran against -- attaching it to
+    the polygon it produced gives whoever opens the permit later the
+    original source document, not just the derived geometry and poles.
+    """
+
+    result = work_areas_layer.attachments.add(object_id, str(pdf_path))
+    add_result = result.get("addAttachmentResult", {})
+    if not add_result.get("success"):
+        raise PermitCreationError(
+            f"Failed to attach {pdf_path.name} to permit: {add_result.get('error') or result}"
+        )
+
+
+def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) -> CreatedPermit:
+    """Connects fresh (right here, right before use) and creates the permit,
+    its poles, and attaches the source plan set PDF to the permit feature.
+    Discovery can take several minutes (Qwen load + inference) before this
+    ever runs -- connecting at the last possible moment, rather than earlier
+    and holding onto that connection, avoids using a connection that's gone
+    stale by the time it's actually needed.
     """
 
     gis = get_gis()
@@ -286,6 +304,13 @@ def create_permit_and_poles(discovery_result: dict[str, Any]) -> CreatedPermit:
                 f"Created permit {permit_number} but failed to create "
                 f"{len(failures)} of {len(valid_poles)} pole(s): {failures[0].get('error')}"
             )
+
+    try:
+        attach_plan_set(work_areas_layer, permit_object_id, pdf_path)
+    except PermitCreationError as exc:
+        raise PermitCreationError(
+            f"Created permit {permit_number} with {len(valid_poles)} pole(s), but {exc}"
+        ) from exc
 
     return CreatedPermit(
         object_id=permit_object_id,

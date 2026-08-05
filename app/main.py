@@ -126,7 +126,7 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
             discovery_result.get("accepted_pole_count"),
         )
 
-        permit = create_permit_and_poles(discovery_result)
+        permit = create_permit_and_poles(discovery_result, pdf_path)
         job_store.set_completed(job_id, permit)
         logger.info(
             "Job %s: created permit %s with %s pole(s)",

@@ -47,14 +47,16 @@ From there:
 4. Derives a work-area polygon by buffering a multipoint of the accepted
    poles' catalog coordinates (`WORK_AREA_BUFFER_FEET`, default 50ft) --
    works for any pole count, including 1 or 2.
-5. Creates the permit in `JointUsePermits_WorkAreas` with a
-   system-generated `PERMIT_NUMBER` (sequential per year, e.g.
-   `1338-2026`), and one point per accepted pole in
-   `JointUsePermits_Poles`, linked via `PERMIT_GLOBALID`. Every created
-   pole is marked `POLE_OWNER = "City"` -- this pipeline only matches
-   against the city's own pole catalog, so it has no way to detect
-   foreign-owned poles; that count stays a manual field on the permit
-   form.
+5. Creates the permit in the WorkAreas layer with a system-generated
+   permit number (sequential per year, e.g. `1338-2026`), one point per
+   accepted pole in the Poles layer (linked via `permit_globalid`), and
+   attaches the uploaded plan set PDF to the permit feature itself
+   (`attach_plan_set` in `permit_creation.py`) -- so the source document
+   is on the permit from the moment it's created, not just its derived
+   geometry and poles. Every created pole is marked `pole_owner = "City"`
+   -- this pipeline only matches against the city's own pole catalog, so
+   it has no way to detect foreign-owned poles; that count stays a manual
+   field on the permit form.
 
 ## Running it
 
