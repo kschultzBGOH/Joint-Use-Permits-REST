@@ -69,8 +69,9 @@ From there:
    poles' catalog coordinates (`WORK_AREA_BUFFER_FEET`, default 50ft) --
    works for any pole count, including 1 or 2.
 5. Creates the permit in the WorkAreas layer with a system-generated
-   permit number (sequential per year, e.g. `1338-2026`), one point per
-   accepted pole in the Poles layer (linked via `permit_globalid`), and
+   permit number (sequential per year, e.g. `1338-2026`, allocated from
+   the `PermitNumberSequence` table -- see "Permit numbering" below), one
+   point per accepted pole in the Poles layer (linked via `permit_globalid`), and
    attaches the uploaded plan set PDF to the permit feature itself
    (`attach_plan_set` in `permit_creation.py`) -- so the source document
    is on the permit from the moment it's created, not just its derived
@@ -78,6 +79,31 @@ From there:
    -- this pipeline only matches against the city's own pole catalog, so
    it has no way to detect foreign-owned poles; that count stays a manual
    field on the permit form.
+
+## Permit numbering
+
+Permit numbers (`1338-2026`) are allocated from a `PermitNumberSequence`
+table on the same hosted feature service as the WorkAreas/Poles layers
+(`year`, `number` -- one row per year holding the last number issued that
+year; see `Joint-Use-Permits/scripts/create_layers.py`). Creating a permit
+reads that year's row, adds one, writes it back, and uses the result
+(`permit_creation.py`'s `generate_permit_number`); the read-increment-write
+is lock-protected against two permits being created at nearly the same
+moment.
+
+**Before this goes live**, open the `PermitNumberSequence` table directly
+in Portal and add (or edit) the row for the current year so `number` is
+wherever your real/legacy numbering scheme currently stands -- the next
+permit created continues from `number + 1`, not from 1. If no row exists
+for a year yet, one is created automatically starting from 0 (so the
+first permit of that year gets `1-<year>`).
+
+`PERMIT_NUMBER_SEQUENCE_TABLE_INDEX` (default `0`) is this table's index
+within the service's *tables*, a separate collection from its layers --
+`create_layers.py` prints the right value when it creates the service; if
+you're adding this table to an already-live service, run
+`Joint-Use-Permits/scripts/add_permit_number_sequence.py` instead, which
+prints it too.
 
 ## Running it
 
@@ -119,7 +145,9 @@ app/
    Portal connection was available while building this.
 2. **Permit numbering isn't coordinated with the original Joint Use
    Permits layer** (`cad924092c44404b825dec2eef80d604`) -- it's scoped
-   only to `JointUsePermits_WorkAreas`' own `PERMIT_NUMBER` values.
+   only to the `PermitNumberSequence` table on this service (see "Permit
+   numbering" above), which can be manually seeded to match wherever that
+   original numbering left off.
 3. **Vision model reloads on every job.** Model load time is likely a
    meaningful chunk of each job's runtime -- keeping it loaded
    persistently between jobs would be a real perf win, at the cost of

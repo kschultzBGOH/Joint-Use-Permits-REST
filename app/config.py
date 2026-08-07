@@ -94,12 +94,19 @@ ARCGIS_AUTH_MODE = _env("ARCGIS_AUTH_MODE", "pro")
 ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
 
 # Portal item ID of the JointUsePermits hosted feature service, which holds
-# BOTH related layers (see Joint-Use-Permits/scripts/create_layers.py):
-#   layer 0 = WorkAreas (permit record + boundary polygon)
-#   layer 1 = Poles     (related to a permit via permit_globalid)
+# BOTH related layers AND the permit-numbering table (see
+# Joint-Use-Permits/scripts/create_layers.py):
+#   layer 0 = WorkAreas             (permit record + boundary polygon)
+#   layer 1 = Poles                 (related to a permit via permit_globalid)
+#   table 2 = PermitNumberSequence  (one row per year -- see generate_permit_number)
 SERVICE_ITEM_ID = _env("SERVICE_ITEM_ID")
 WORK_AREAS_LAYER_INDEX = _env_int("WORK_AREAS_LAYER_INDEX", 0)
 POLES_LAYER_INDEX = _env_int("POLES_LAYER_INDEX", 1)
+# Index within item.tables (a separate collection from item.layers), not
+# the "2" above -- that's this table's continuous position in the
+# service's combined layer+table numbering, used only for the REST URL.
+# With exactly one table on the service, item.tables[0] is that table.
+PERMIT_NUMBER_SEQUENCE_TABLE_INDEX = _env_int("PERMIT_NUMBER_SEQUENCE_TABLE_INDEX", 0)
 
 # Matches scripts/create_layers.py's WKID in the Joint-Use-Permits repo
 # (NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet). The pole catalog's x/y

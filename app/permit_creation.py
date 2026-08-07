@@ -13,11 +13,12 @@ case-insensitively from the live layer at runtime (see resolve_fields).
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from arcgis.features import FeatureLayer
+from arcgis.features import FeatureLayer, Table
 from arcgis.gis import GIS, Item
 
 from . import config
@@ -26,6 +27,21 @@ from .job_store import CreatedPermit
 from .work_area import build_work_area_polygon
 
 logger = logging.getLogger(__name__)
+
+# Guards the permit-number sequence table's read-increment-write below --
+# without it, two permits created at nearly the same moment (two upload
+# jobs finishing close together, or a job finishing while someone clicks
+# "skip upload") could both read the same last-issued number and save the
+# same "next" one, handing out a duplicate permit number. Only protects
+# against a race within this one process; see job_store.py's docstring
+# about this service assuming a single worker process.
+_permit_number_lock = threading.Lock()
+
+PERMIT_NUMBER_SEQUENCE_FIELDS = {
+    "objectid": "objectid",
+    "year": "year",
+    "number": "number",
+}
 
 WORK_AREA_FIELDS = {
     "permit_number": "permit_number",
@@ -83,9 +99,9 @@ def _describe_item(item: Item) -> str:
         return "item details unavailable"
 
 
-def get_layer(gis: GIS, item_id: str, layer_index: int) -> FeatureLayer:
-    """Fetches one layer of the service, retrying once with a brand-new
-    connection if the first attempt fails on permissions.
+def _get_item(gis: GIS, item_id: str) -> Item:
+    """Fetches the service item, retrying once with a brand-new connection
+    if the first attempt fails on permissions.
 
     A permission failure here is surprising -- these items are meant to be
     readable by this service's own account -- so this doesn't silently
@@ -123,6 +139,14 @@ def get_layer(gis: GIS, item_id: str, layer_index: int) -> FeatureLayer:
     if item is None:
         raise PermitCreationError(f"Layer item {item_id} was not found.")
 
+    return item
+
+
+def get_layer(gis: GIS, item_id: str, layer_index: int) -> FeatureLayer:
+    """Fetches one spatial layer of the service (see _get_item)."""
+
+    item = _get_item(gis, item_id)
+
     layers = item.layers
     if layer_index >= len(layers):
         raise PermitCreationError(
@@ -142,6 +166,38 @@ def get_layer(gis: GIS, item_id: str, layer_index: int) -> FeatureLayer:
         _describe_item(item),
     )
     return layer
+
+
+def get_table(gis: GIS, item_id: str, table_index: int) -> Table:
+    """Fetches one non-spatial table of the service (see _get_item).
+
+    A table is a separate collection from the service's spatial layers
+    (item.tables, not item.layers) -- table_index is this table's
+    position within THAT collection, not its combined layer+table id in
+    the service's own numbering (see config.py's comment on this).
+    """
+
+    item = _get_item(gis, item_id)
+
+    tables = item.tables
+    if table_index >= len(tables):
+        raise PermitCreationError(
+            f"Service {item_id} has no table at index {table_index} "
+            f"(it has {len(tables)} table(s): "
+            f"{', '.join(str(table.properties.name) for table in tables)}). "
+            f"Check PERMIT_NUMBER_SEQUENCE_TABLE_INDEX."
+        )
+
+    table = tables[table_index]
+    logger.info(
+        "Fetched %s table %s (%s) as %s (%s).",
+        item_id,
+        table_index,
+        table.properties.name,
+        _identity(gis),
+        _describe_item(item),
+    )
+    return table
 
 
 def resolve_fields(
@@ -185,30 +241,69 @@ def resolve_fields(
     return resolved
 
 
-def generate_permit_number(work_areas_layer: FeatureLayer, permit_number_field: str) -> str:
+def generate_permit_number(gis: GIS, year: int) -> str:
     """Sequential-per-year permit number, e.g. "1338-2026".
 
-    Scoped to the WorkAreas layer's own permit numbers -- this does NOT
-    coordinate with the original (separate, unconfirmed-schema) Joint Use
-    Permits layer's numbering.
+    Backed by the PermitNumberSequence table (see Joint-Use-Permits/
+    scripts/create_layers.py) rather than scanning WorkAreas for the
+    highest existing permit_number -- that couldn't be seeded ahead of
+    time, so a fresh deployment (or one that needs to match wherever a
+    legacy/manual numbering scheme currently stands) had no way to start
+    anywhere but 1. This table can be opened and edited directly in
+    Portal before going live: set `number` for the current year to
+    wherever numbering actually left off, and the next permit created
+    continues from number + 1.
+
+    Read-increment-write is wrapped in _permit_number_lock so two permits
+    created at nearly the same moment can't both read the same last-issued
+    number and hand out a duplicate (see the lock's module-level comment).
     """
 
-    year = datetime.now(timezone.utc).year
+    with _permit_number_lock:
+        table = get_table(
+            gis, config.SERVICE_ITEM_ID, config.PERMIT_NUMBER_SEQUENCE_TABLE_INDEX
+        )
+        fields = resolve_fields(
+            table, PERMIT_NUMBER_SEQUENCE_FIELDS, "PermitNumberSequence table"
+        )
 
-    result = work_areas_layer.query(
-        where=f"{permit_number_field} LIKE '%-{year}'",
-        out_fields=permit_number_field,
-        return_geometry=False,
-    )
+        result = table.query(
+            where=f"{fields['year']} = {year}",
+            out_fields=f"{fields['objectid']},{fields['number']}",
+            return_geometry=False,
+        )
 
-    max_sequence = 0
-    for feature in result.features:
-        value = str(feature.attributes.get(permit_number_field, ""))
-        prefix = value.split("-")[0]
-        if prefix.isdigit():
-            max_sequence = max(max_sequence, int(prefix))
+        if result.features:
+            row = result.features[0]
+            object_id = row.attributes[fields["objectid"]]
+            current_number = int(row.attributes[fields["number"]] or 0)
+        else:
+            add_result = table.edit_features(
+                adds=[{"attributes": {fields["year"]: year, fields["number"]: 0}}]
+            )
+            add_row = add_result["addResults"][0]
+            if not add_row.get("success"):
+                raise PermitCreationError(
+                    f"Failed to create the permit number sequence row for {year}: "
+                    f"{add_row.get('error')}"
+                )
+            object_id = add_row["objectId"]
+            current_number = 0
 
-    return f"{max_sequence + 1}-{year}"
+        next_number = current_number + 1
+        update_result = table.edit_features(
+            updates=[
+                {"attributes": {fields["objectid"]: object_id, fields["number"]: next_number}}
+            ]
+        )
+        update_row = update_result["updateResults"][0]
+        if not update_row.get("success"):
+            raise PermitCreationError(
+                f"Failed to update the permit number sequence for {year}: "
+                f"{update_row.get('error')}"
+            )
+
+    return f"{next_number}-{year}"
 
 
 def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -300,7 +395,8 @@ def create_permit_and_poles(
     pole_fields = resolve_fields(poles_layer, POLE_FIELDS, "Poles layer")
 
     geometry = build_work_area_geometry(valid_poles)
-    permit_number = generate_permit_number(work_areas_layer, work_area_fields["permit_number"])
+    year = datetime.now(timezone.utc).year
+    permit_number = generate_permit_number(gis, year)
 
     pole_owners = [resolve_pole_owner(pole["pole_id"]) for pole in valid_poles]
     total_city_pole_count = sum(1 for owner in pole_owners if owner == "City")
