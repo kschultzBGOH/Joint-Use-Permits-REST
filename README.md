@@ -20,8 +20,22 @@ is `"queued"` or `"processing"`, the response also carries an optional
 discovery pipeline's `on_progress` callback as it runs, for the widget to
 show instead of a plain spinner. It's best-effort: if a pipeline stage
 doesn't report progress, `detail` is just absent from that response, and
-the widget falls back to its own generic status text. Discovery
-(`app/discovery/`) runs in two tiers:
+the widget falls back to its own generic status text.
+
+Finding zero poles in the PDF doesn't fail the job. The permit is still
+created -- just with no geometry yet and no poles -- so the widget's
+"Define Project Scope" screen has a real permit to add poles to by hand
+(search the catalog, or click poles on the linked map); the widget's own
+work-area recompute already rebuilds the shape from whatever poles
+actually end up on the permit, on every add/approve/reject, so there's
+nothing useful to fail over at zero.
+
+`POST /permits` (no body) creates that same kind of empty permit
+directly and synchronously -- for someone with no plan set PDF to upload
+at all, so they aren't forced through the upload step just to reach the
+screen where poles get added by hand anyway.
+
+Discovery (`app/discovery/`) runs in two tiers:
 
 1. **Native-text pass** (`native_text.py`): extracts embedded PDF text
    (PyMuPDF), checks single words and adjacent word-pairs against the pole

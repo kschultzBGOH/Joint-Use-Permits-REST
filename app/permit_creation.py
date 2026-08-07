@@ -211,13 +211,21 @@ def generate_permit_number(work_areas_layer: FeatureLayer, permit_number_field: 
     return f"{max_sequence + 1}-{year}"
 
 
-def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Work-area polygon covering the discovered poles (see work_area.py)."""
+def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Work-area polygon covering the discovered poles (see work_area.py).
+
+    Returns None when there's nothing to build one from -- rather than
+    failing permit creation outright, the permit is created shape-less
+    and the Joint Use Permits widget's "Define Project Scope" screen lets
+    a human add poles by hand from there (search, or click-to-add on the
+    linked map). That screen already rebuilds the work area from whatever
+    poles actually exist on every add/approve/reject
+    (regeneratePermitWorkArea); zero discovered poles is just the
+    starting point for that, not a dead end.
+    """
 
     if not valid_poles:
-        raise PermitCreationError(
-            "No poles with coordinates were discovered; a work area cannot be created."
-        )
+        return None
 
     points = [(float(pole["x"]), float(pole["y"])) for pole in valid_poles]
     polygon = build_work_area_polygon(
@@ -251,13 +259,22 @@ def attach_plan_set(work_areas_layer: FeatureLayer, object_id: int, pdf_path: Pa
         )
 
 
-def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) -> CreatedPermit:
+def create_permit_and_poles(
+    discovery_result: dict[str, Any], pdf_path: Path | None
+) -> CreatedPermit:
     """Connects fresh (right here, right before use) and creates the permit,
-    its poles, and attaches the source plan set PDF to the permit feature.
-    Discovery can take several minutes (Qwen load + inference) before this
-    ever runs -- connecting at the last possible moment, rather than earlier
-    and holding onto that connection, avoids using a connection that's gone
-    stale by the time it's actually needed.
+    its poles, and (if there is one) attaches the source plan set PDF to the
+    permit feature. Discovery can take several minutes (Qwen load +
+    inference) before this ever runs -- connecting at the last possible
+    moment, rather than earlier and holding onto that connection, avoids
+    using a connection that's gone stale by the time it's actually needed.
+
+    `pdf_path` is None for a permit created with no plan set at all (see
+    the /permits endpoint in main.py) -- someone with nothing to upload
+    defining the project's scope by hand from the start, rather than being
+    forced through a PDF upload first. Nothing here treats a PDF as
+    required; discovery_result's own poles (possibly empty) are what
+    actually drive pole/geometry creation either way.
     """
 
     gis = get_gis()
@@ -289,19 +306,22 @@ def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) ->
     total_city_pole_count = sum(1 for owner in pole_owners if owner == "City")
     foreign_pole_count = sum(1 for owner in pole_owners if owner == "Foreign")
 
-    add_result = work_areas_layer.edit_features(
-        adds=[
-            {
-                "geometry": geometry,
-                "attributes": {
-                    work_area_fields["permit_number"]: permit_number,
-                    work_area_fields["totalcitypolecount"]: total_city_pole_count,
-                    work_area_fields["foreignpolecount"]: foreign_pole_count,
-                    work_area_fields["polereviewstatus"]: PERMIT_REVIEW_STATUS_NEEDS_REVIEW,
-                },
-            }
-        ]
-    )
+    new_work_area: dict[str, Any] = {
+        "attributes": {
+            work_area_fields["permit_number"]: permit_number,
+            work_area_fields["totalcitypolecount"]: total_city_pole_count,
+            work_area_fields["foreignpolecount"]: foreign_pole_count,
+            work_area_fields["polereviewstatus"]: PERMIT_REVIEW_STATUS_NEEDS_REVIEW,
+        },
+    }
+    # Omitted rather than sent as null -- a shape-less permit is a valid,
+    # intentional state (see build_work_area_geometry), and some hosted
+    # layers are pickier about an explicit null geometry than about the
+    # key being absent entirely.
+    if geometry is not None:
+        new_work_area["geometry"] = geometry
+
+    add_result = work_areas_layer.edit_features(adds=[new_work_area])
     permit_add = add_result["addResults"][0]
     if not permit_add.get("success"):
         raise PermitCreationError(f"Failed to create permit: {permit_add.get('error')}")
@@ -337,12 +357,13 @@ def create_permit_and_poles(discovery_result: dict[str, Any], pdf_path: Path) ->
                 f"{len(failures)} of {len(valid_poles)} pole(s): {failures[0].get('error')}"
             )
 
-    try:
-        attach_plan_set(work_areas_layer, permit_object_id, pdf_path)
-    except PermitCreationError as exc:
-        raise PermitCreationError(
-            f"Created permit {permit_number} with {len(valid_poles)} pole(s), but {exc}"
-        ) from exc
+    if pdf_path is not None:
+        try:
+            attach_plan_set(work_areas_layer, permit_object_id, pdf_path)
+        except PermitCreationError as exc:
+            raise PermitCreationError(
+                f"Created permit {permit_number} with {len(valid_poles)} pole(s), but {exc}"
+            ) from exc
 
     return CreatedPermit(
         object_id=permit_object_id,

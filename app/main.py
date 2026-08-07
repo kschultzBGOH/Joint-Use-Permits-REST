@@ -18,7 +18,16 @@ anything that reads it.
 Submitting a job runs this service's own pole-discovery pipeline
 (app/discovery/) against the PDF, derives a work-area polygon from the
 discovered pole locations, and creates the permit + its poles directly in
-the Joint Use Permits hosted layers.
+the Joint Use Permits hosted layers. Finding zero poles doesn't fail the
+job -- it creates a shape-less permit with none, for the widget's "Define
+Project Scope" screen to fill in by hand.
+
+    POST /permits             no body -- creates an empty permit synchronously
+                              -> 201 {objectId, globalId, permitNumber, poleCount: 0}
+
+For someone with no plan set PDF to upload at all: skips discovery
+entirely rather than making a PDF upload mandatory just to reach the
+screen where poles get added by hand anyway.
 """
 
 from __future__ import annotations
@@ -99,6 +108,15 @@ async def create_job(file: UploadFile) -> dict:
     return {"jobId": job.id}
 
 
+def _serialize_permit(permit) -> dict:
+    return {
+        "objectId": permit.object_id,
+        "globalId": permit.global_id,
+        "permitNumber": permit.permit_number,
+        "poleCount": permit.pole_count,
+    }
+
+
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     job = job_store.get(job_id)
@@ -112,17 +130,36 @@ def get_job(job_id: str) -> dict:
         return response
 
     if job.status == "completed":
-        return {
-            "status": "completed",
-            "permit": {
-                "objectId": job.permit.object_id,
-                "globalId": job.permit.global_id,
-                "permitNumber": job.permit.permit_number,
-                "poleCount": job.permit.pole_count,
-            },
-        }
+        return {"status": "completed", "permit": _serialize_permit(job.permit)}
 
     return {"status": "failed", "error": job.error}
+
+
+@app.post("/permits", status_code=201)
+def create_empty_permit() -> dict:
+    """Creates a permit with no discovered poles, synchronously (no PDF to
+    process, so no job/polling needed) -- for someone with no plan set to
+    upload who wants to define the project's scope by hand from the start
+    (search the pole catalog, or click poles on the linked map) rather
+    than being forced through the upload step first.
+    """
+
+    empty_discovery_result = {
+        "status": "no_poles_found",
+        "accepted_pole_count": 0,
+        "review_candidate_count": 0,
+        "accepted_pole_ids": [],
+        "accepted_poles": [],
+    }
+
+    try:
+        permit = create_permit_and_poles(empty_discovery_result, pdf_path=None)
+    except PermitCreationError as exc:
+        logger.error("Failed to create an empty permit: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    logger.info("Created empty permit %s (no plan set uploaded).", permit.permit_number)
+    return _serialize_permit(permit)
 
 
 def _process_job(job_id: str, pdf_path: Path) -> None:
@@ -142,9 +179,14 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
             discovery_result.get("accepted_pole_count"),
         )
 
-        report_progress(
-            f"Creating the permit and {discovery_result.get('accepted_pole_count', 0)} pole(s) in ArcGIS..."
-        )
+        pole_count = discovery_result.get("accepted_pole_count", 0)
+        if pole_count == 0:
+            report_progress(
+                "No poles found automatically -- creating the permit so you can define its "
+                "scope by hand..."
+            )
+        else:
+            report_progress(f"Creating the permit and {pole_count} pole(s) in ArcGIS...")
         permit = create_permit_and_poles(discovery_result, pdf_path)
         job_store.set_completed(job_id, permit)
         logger.info(
