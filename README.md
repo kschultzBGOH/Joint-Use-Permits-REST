@@ -13,7 +13,14 @@ still needs verifying.
 ## What it does
 
 `POST /jobs` (multipart, field `file`) accepts a plan set PDF and starts
-background processing; `GET /jobs/{jobId}` polls for status. Discovery
+background processing; `GET /jobs/{jobId}` polls for status. While a job
+is `"queued"` or `"processing"`, the response also carries an optional
+`detail` string -- a human-readable "what's happening right now" (e.g.
+"Reading page 3 of 12...", "Loading the vision model..."), pushed by the
+discovery pipeline's `on_progress` callback as it runs, for the widget to
+show instead of a plain spinner. It's best-effort: if a pipeline stage
+doesn't report progress, `detail` is just absent from that response, and
+the widget falls back to its own generic status text. Discovery
 (`app/discovery/`) runs in two tiers:
 
 1. **Native-text pass** (`native_text.py`): extracts embedded PDF text

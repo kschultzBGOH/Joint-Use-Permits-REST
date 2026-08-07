@@ -17,10 +17,10 @@ import json
 import logging
 import re
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 from PIL import Image
 
@@ -172,6 +172,7 @@ def discover_visual_poles(
     tile_model_max_edge_pixels: int = 1800,
     minimum_candidate_confidence: float = 0.80,
     strict: bool = False,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> VisualDiscoveryResult:
     """Run page routing, targeted tile rendering, and pole-ID extraction."""
 
@@ -190,6 +191,7 @@ def discover_visual_poles(
         confidence_threshold=threshold,
         maximum_image_edge=preview_max_edge_pixels,
         strict=strict,
+        on_progress=on_progress,
     )
 
     relevant_pages = sorted(
@@ -197,6 +199,12 @@ def discover_visual_poles(
     )
     assessed_pages = {assessment["page_number"] for assessment in page_assessments}
     skipped_pages = sorted(assessed_pages - set(relevant_pages))
+
+    if on_progress is not None:
+        on_progress(
+            f"{len(relevant_pages)} of {len(assessed_pages)} page(s) contain pole labels -- "
+            "reading them closely..."
+        )
 
     selections_by_page = {selection["page_number"]: selection for selection in selections}
     relevant_selections: list[VisualPageSelection] = []
@@ -227,7 +235,11 @@ def discover_visual_poles(
         prompt=tile_prompt,
         maximum_image_edge=tile_model_max_edge_pixels,
         strict=strict,
+        on_progress=on_progress,
     )
+
+    if on_progress is not None:
+        on_progress(f"Read {len(rendered_tiles)} image tile(s); validating candidate pole IDs...")
 
     apply_candidate_evidence_rules(candidates=candidates, minimum_confidence=candidate_confidence_threshold)
 
@@ -280,18 +292,23 @@ def assess_visual_previews(
     confidence_threshold: float = 0.75,
     maximum_image_edge: int = 1400,
     strict: bool = False,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> list[PreviewAssessment]:
     """Ask Qwen which preview pages require high-resolution analysis."""
 
     threshold = _validate_confidence_threshold(confidence_threshold)
     assessments: list[PreviewAssessment] = []
+    ordered_previews = sorted(previews, key=lambda item: item["page_number"])
+    total_previews = len(ordered_previews)
 
-    for preview in sorted(previews, key=lambda item: item["page_number"]):
+    for index, preview in enumerate(ordered_previews, start=1):
         page_number = preview["page_number"]
         image_path = Path(preview["image_path"])
         raw_response = ""
 
         logger.info("Assessing visual preview for page %s.", page_number)
+        if on_progress is not None:
+            on_progress(f"Reading page {page_number} ({index} of {total_previews})...")
 
         try:
             raw_response = _generate_image_response(
@@ -362,14 +379,17 @@ def analyze_visual_tiles(
     *,
     maximum_image_edge: int = 1800,
     strict: bool = False,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> tuple[list[TileAnalysis], list[VisualPoleCandidate]]:
     """Read candidate IDs from tiles and validate each against the catalog."""
 
     analyses: list[TileAnalysis] = []
     candidates: list[VisualPoleCandidate] = []
     candidate_resolver = CatalogCandidateResolver(pole_catalog)
+    ordered_tiles = sorted(tiles, key=lambda item: (item["page_number"], item["tile_index"] or 0))
+    total_tiles = len(ordered_tiles)
 
-    for tile in sorted(tiles, key=lambda item: (item["page_number"], item["tile_index"] or 0)):
+    for index, tile in enumerate(ordered_tiles, start=1):
         tile_index = tile["tile_index"]
         if tile_index is None:
             raise VisualDiscoveryError("A tile render is missing its tile index.")
@@ -502,6 +522,12 @@ def analyze_visual_tiles(
             }
 
         analyses.append(analysis)
+
+        if on_progress is not None:
+            found_note = f" -- {len(candidates)} candidate pole ID(s) spotted so far" if candidates else ""
+            on_progress(
+                f"Reading page {tile['page_number']}, tile {index} of {total_tiles}{found_note}..."
+            )
 
     return analyses, candidates
 

@@ -5,6 +5,15 @@ widget repo's restApiService.ts and README:
 
     POST /jobs                multipart/form-data, field "file" = plan set PDF
     GET  /jobs/{job_id}       poll for status/result
+                              -> {"status": "queued" | "processing", "detail"?: string}
+                              -> {"status": "completed", "permit": {...}}
+                              -> {"status": "failed", "error": string}
+
+`detail` is a human-readable "what's happening right now" (e.g. "Reading
+page 3 of 12..."), set by the discovery pipeline's on_progress callback as
+it runs -- optional and best-effort, so an older/simpler pipeline stage
+that doesn't report progress just leaves it unset rather than breaking
+anything that reads it.
 
 Submitting a job runs this service's own pole-discovery pipeline
 (app/discovery/) against the PDF, derives a work-area polygon from the
@@ -97,7 +106,10 @@ def get_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Job {job_id} was not found.")
 
     if job.status in ("queued", "processing"):
-        return {"status": job.status}
+        response: dict = {"status": job.status}
+        if job.detail:
+            response["detail"] = job.detail
+        return response
 
     if job.status == "completed":
         return {
@@ -117,8 +129,12 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
     job_store.set_processing(job_id)
     logger.info("Job %s: discovering poles in %s", job_id, pdf_path)
 
+    def report_progress(detail: str) -> None:
+        logger.info("Job %s: %s", job_id, detail)
+        job_store.set_progress(job_id, detail)
+
     try:
-        discovery_result = discover_poles(job_id, pdf_path)
+        discovery_result = discover_poles(job_id, pdf_path, on_progress=report_progress)
         logger.info(
             "Job %s: discovery status=%s, accepted_poles=%s",
             job_id,
@@ -126,6 +142,9 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
             discovery_result.get("accepted_pole_count"),
         )
 
+        report_progress(
+            f"Creating the permit and {discovery_result.get('accepted_pole_count', 0)} pole(s) in ArcGIS..."
+        )
         permit = create_permit_and_poles(discovery_result, pdf_path)
         job_store.set_completed(job_id, permit)
         logger.info(

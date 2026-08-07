@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from .. import config
 from .native_text import NativeTextDiscoveryError, discover_native_text
@@ -31,15 +31,33 @@ class DiscoveryError(RuntimeError):
     """Raised when pole discovery fails."""
 
 
-def discover_poles(job_id: str, pdf_path: Path) -> dict[str, Any]:
+def discover_poles(
+    job_id: str,
+    pdf_path: Path,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> dict[str, Any]:
+    def report(message: str) -> None:
+        if on_progress is not None:
+            on_progress(message)
+
     with _pipeline_lock:
         try:
+            report("Validating the plan set PDF...")
             validated_pdf_path = validate_pdf(pdf_path=pdf_path, max_pdf_mb=config.MAX_PDF_MB)
+
             page_inspections = inspect_pages(validated_pdf_path)
+            report(f"Inspected {len(page_inspections)} page(s).")
+
+            report("Loading the pole reference catalog...")
             pole_catalog = PoleCatalog.load()
 
+            report("Scanning pages for existing pole labels...")
             native_discovery = discover_native_text(
                 pdf_path=validated_pdf_path, pole_catalog=pole_catalog
+            )
+            report(
+                f"Found {native_discovery['exact_match_occurrence_count']} label(s) directly in "
+                f"the PDF text."
             )
 
             # When native discovery finds nothing at all, retain pure
@@ -62,6 +80,10 @@ def discover_poles(job_id: str, pdf_path: Path) -> dict[str, Any]:
             vision_model = None
 
             if visual_renders["selected_page_count"] > 0:
+                report(
+                    f"{visual_renders['selected_page_count']} page(s) need a closer look -- "
+                    "loading the vision model (first run can take a minute)..."
+                )
                 try:
                     vision_model = load_vision_model(config.QWEN_MODEL_DIR)
                     visual_discovery = discover_visual_poles(
@@ -78,11 +100,15 @@ def discover_poles(job_id: str, pdf_path: Path) -> dict[str, Any]:
                         tile_model_max_edge_pixels=1800,
                         minimum_candidate_confidence=config.MINIMUM_CANDIDATE_CONFIDENCE,
                         strict=False,
+                        on_progress=report,
                     )
                 finally:
                     if vision_model is not None:
                         unload_vision_model(vision_model)
+            else:
+                report("No pages needed a closer visual look -- direct text was enough.")
 
+            report("Finalizing discovered poles...")
             return build_pole_discovery_result(
                 pole_catalog=pole_catalog,
                 native_discovery=native_discovery,

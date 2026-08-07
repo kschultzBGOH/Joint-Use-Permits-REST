@@ -31,6 +31,10 @@ class Job:
     status: JobStatus = "queued"
     permit: Optional[CreatedPermit] = None
     error: Optional[str] = None
+    # Human-readable "what's happening right now" -- e.g. "Reading page 3
+    # of 12...". Set via set_progress as the pipeline runs; not meaningful
+    # once status is "completed"/"failed" (the caller stops polling then).
+    detail: Optional[str] = None
 
 
 class JobStore:
@@ -53,6 +57,13 @@ class JobStore:
             job = self._jobs.get(job_id)
             if job:
                 job.status = "processing"
+
+    def set_progress(self, job_id: str, detail: str) -> None:
+        """Updates the "what's happening now" text without changing status."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.detail = detail
 
     def set_completed(self, job_id: str, permit: CreatedPermit) -> None:
         with self._lock:
