@@ -39,7 +39,6 @@ _permit_number_lock = threading.Lock()
 
 PERMIT_NUMBER_SEQUENCE_FIELDS = {
     "objectid": "objectid",
-    "year": "year",
     "number": "number",
 }
 
@@ -241,18 +240,22 @@ def resolve_fields(
     return resolved
 
 
-def generate_permit_number(gis: GIS, year: int) -> str:
-    """Sequential-per-year permit number, e.g. "1338-2026".
+def generate_permit_number(gis: GIS) -> str:
+    """Sequential permit number, e.g. "1338-2026".
 
-    Backed by the PermitNumberSequence table (see Joint-Use-Permits/
-    scripts/create_layers.py) rather than scanning WorkAreas for the
-    highest existing permit_number -- that couldn't be seeded ahead of
-    time, so a fresh deployment (or one that needs to match wherever a
-    legacy/manual numbering scheme currently stands) had no way to start
-    anywhere but 1. This table can be opened and edited directly in
-    Portal before going live: set `number` for the current year to
-    wherever numbering actually left off, and the next permit created
-    continues from number + 1.
+    Backed by the PermitNumberSequence table's single row (see
+    Joint-Use-Permits/scripts/create_layers.py) rather than scanning
+    WorkAreas for the highest existing permit_number -- that couldn't be
+    seeded ahead of time, so a fresh deployment (or one that needs to
+    match wherever a legacy/manual numbering scheme currently stands) had
+    no way to start anywhere but 1. This table can be opened and edited
+    directly in Portal before going live: set `number` to wherever
+    numbering actually left off, and the next permit created continues
+    from number + 1.
+
+    The count never resets per year -- it's one running total, and the
+    year in the returned string is just whatever year it is right now,
+    computed live rather than looked up.
 
     Read-increment-write is wrapped in _permit_number_lock so two permits
     created at nearly the same moment can't both read the same last-issued
@@ -268,7 +271,7 @@ def generate_permit_number(gis: GIS, year: int) -> str:
         )
 
         result = table.query(
-            where=f"{fields['year']} = {year}",
+            where="1=1",
             out_fields=f"{fields['objectid']},{fields['number']}",
             return_geometry=False,
         )
@@ -278,14 +281,11 @@ def generate_permit_number(gis: GIS, year: int) -> str:
             object_id = row.attributes[fields["objectid"]]
             current_number = int(row.attributes[fields["number"]] or 0)
         else:
-            add_result = table.edit_features(
-                adds=[{"attributes": {fields["year"]: year, fields["number"]: 0}}]
-            )
+            add_result = table.edit_features(adds=[{"attributes": {fields["number"]: 0}}])
             add_row = add_result["addResults"][0]
             if not add_row.get("success"):
                 raise PermitCreationError(
-                    f"Failed to create the permit number sequence row for {year}: "
-                    f"{add_row.get('error')}"
+                    f"Failed to create the permit number sequence row: {add_row.get('error')}"
                 )
             object_id = add_row["objectId"]
             current_number = 0
@@ -299,11 +299,10 @@ def generate_permit_number(gis: GIS, year: int) -> str:
         update_row = update_result["updateResults"][0]
         if not update_row.get("success"):
             raise PermitCreationError(
-                f"Failed to update the permit number sequence for {year}: "
-                f"{update_row.get('error')}"
+                f"Failed to update the permit number sequence: {update_row.get('error')}"
             )
 
-    return f"{next_number}-{year}"
+    return f"{next_number}-{datetime.now(timezone.utc).year}"
 
 
 def build_work_area_geometry(valid_poles: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -395,8 +394,7 @@ def create_permit_and_poles(
     pole_fields = resolve_fields(poles_layer, POLE_FIELDS, "Poles layer")
 
     geometry = build_work_area_geometry(valid_poles)
-    year = datetime.now(timezone.utc).year
-    permit_number = generate_permit_number(gis, year)
+    permit_number = generate_permit_number(gis)
 
     pole_owners = [resolve_pole_owner(pole["pole_id"]) for pole in valid_poles]
     total_city_pole_count = sum(1 for owner in pole_owners if owner == "City")

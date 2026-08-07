@@ -83,20 +83,22 @@ From there:
 ## Permit numbering
 
 Permit numbers (`1338-2026`) are allocated from a `PermitNumberSequence`
-table on the same hosted feature service as the WorkAreas/Poles layers
-(`year`, `number` -- one row per year holding the last number issued that
-year; see `Joint-Use-Permits/scripts/create_layers.py`). Creating a permit
-reads that year's row, adds one, writes it back, and uses the result
-(`permit_creation.py`'s `generate_permit_number`); the read-increment-write
-is lock-protected against two permits being created at nearly the same
-moment.
+table on the same hosted feature service as the WorkAreas/Poles layers --
+a single row (`number`) holding the last number ever issued; see
+`Joint-Use-Permits/scripts/create_layers.py`. Creating a permit reads that
+row, adds one, writes it back, and uses the result, with the current year
+appended for display (`permit_creation.py`'s `generate_permit_number`);
+the read-increment-write is lock-protected against two permits being
+created at nearly the same moment. The count never resets per year -- it
+just keeps climbing; the year in the formatted number is whatever year it
+happens to be when that permit is created, not part of the count itself.
 
 **Before this goes live**, open the `PermitNumberSequence` table directly
-in Portal and add (or edit) the row for the current year so `number` is
-wherever your real/legacy numbering scheme currently stands -- the next
-permit created continues from `number + 1`, not from 1. If no row exists
-for a year yet, one is created automatically starting from 0 (so the
-first permit of that year gets `1-<year>`).
+in Portal and edit its one row so `number` is wherever your real/legacy
+numbering scheme currently stands -- the next permit created continues
+from `number + 1`, not from 1. If the table is still empty, a row is
+created automatically starting from 0 (so the first permit created gets
+`1-<year>`).
 
 `PERMIT_NUMBER_SEQUENCE_TABLE_INDEX` (default `0`) is this table's index
 within the service's *tables*, a separate collection from its layers --

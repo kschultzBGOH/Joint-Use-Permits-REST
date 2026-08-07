@@ -98,7 +98,7 @@ ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
 # Joint-Use-Permits/scripts/create_layers.py):
 #   layer 0 = WorkAreas             (permit record + boundary polygon)
 #   layer 1 = Poles                 (related to a permit via permit_globalid)
-#   table 2 = PermitNumberSequence  (one row per year -- see generate_permit_number)
+#   table 2 = PermitNumberSequence  (single running counter -- see generate_permit_number)
 SERVICE_ITEM_ID = _env("SERVICE_ITEM_ID")
 WORK_AREAS_LAYER_INDEX = _env_int("WORK_AREAS_LAYER_INDEX", 0)
 POLES_LAYER_INDEX = _env_int("POLES_LAYER_INDEX", 1)
