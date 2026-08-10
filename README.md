@@ -107,65 +107,26 @@ you're adding this table to an already-live service, run
 `Joint-Use-Permits/scripts/add_permit_number_sequence.py` instead, which
 prints it too.
 
-## Messaging (`app/messaging.py`, `app/email_service.py`)
+## Notifying a contractor by email (`app/email_service.py`)
 
-Backs `Joint-Use-External`, the contractor-facing companion widget. A
-contractor has no Portal account, so this is the ONLY way they read or
-write anything on the `JointUsePermits` service -- every request carries
-an `X-Contractor-Token` header, resolved against the Contractors table's
-`accesstoken` field (see `Joint-Use-Permits`' `ContractorPicker.tsx`,
-which generates one whenever a contractor row is added), and every read
-is scoped to whichever contractor that token belongs to. There is no
-other authorization on these endpoints -- a valid token is a bearer
-credential, not tied to a specific request or session.
+`POST /notify-message` has no auth of its own -- it's called only by the
+internal `Joint-Use-Permits` widget, right after it writes a city reply
+directly to the Messages table itself (trusted Portal users, direct
+`applyEdits`). This endpoint doesn't touch ArcGIS at all; it only sends
+the "you have a new message" email. `{contractorEmail, permitNumber?,
+body}`.
 
-```text
-POST /external/threads
-  X-Contractor-Token header, multipart/form-data: body (str), file? (PDF/etc.)
-  Starts a request with no permit yet.
-  -> 201 {threadId, messageObjectId}
+This service has no other involvement in contractor <-> city messaging.
+The contractor-facing side (`Joint-Use-External`) has its own PHP backend
+(that repo's `api/`) that talks to ArcGIS directly -- a contractor has no
+Portal account, and that backend is the only thing that ever sees their
+access token.
 
-GET /external/threads
-  -> 200 {threads: [{threadId, permitGlobalId, permitNumber, lastMessage,
-                      lastMessageFrom, unreadCount}, ...]}
-  This contractor's own threads only.
-
-GET /external/threads/{threadId}
-  -> 200 {threadId, permitGlobalId, permitNumber, messages: [...]}
-  Marks every city message in the thread read-by-contractor.
-
-POST /external/threads/{threadId}/messages
-  X-Contractor-Token header, multipart/form-data: body (str), file? (PDF/etc.)
-  -> 201 {messageObjectId}
-
-GET  /external/threads/{threadId}/messages/{messageObjectId}/attachments
-GET  /external/threads/{threadId}/messages/{messageObjectId}/attachments/{attachmentId}
-  List / download attachments on one message.
-```
-
-`POST /notify-message` is separate and has no token: the internal
-`Joint-Use-Permits` widget writes a city reply directly to the Messages
-table itself (trusted Portal users, direct `applyEdits`), then calls this
-just to send the "you have a new message" email. `{contractorEmail,
-permitNumber?, body}`.
-
-Every message send -- from either side -- triggers a best-effort email
-via `email_service.py` (plain `smtplib`, no new dependency). `SMTP_HOST`
-blank disables sending entirely: a warning is logged and the message
-itself still saves, so messaging works end-to-end before an SMTP relay is
-provisioned. `CITY_NOTIFICATION_EMAIL` is who a contractor's message
-notifies; a city reply emails that thread's contractor, looked up by name
-in the Contractors table.
-
-`Messages` has no relationship class to WorkAreas -- see
-`Joint-Use-Permits`' `create_layers.py` (`MESSAGES_TABLE_ID`'s comment)
-for why: WorkAreas already exists live with real permits, and a
-relationship can only be declared when a layer is first created. Both
-this API and the widget filter it by the plain `permit_globalid`
-attribute instead. `CONTRACTORS_TABLE_INDEX` / `MESSAGES_TABLE_INDEX`
-(tables[]-position, like `PERMIT_NUMBER_SEQUENCE_TABLE_INDEX` above) need
-to be configured for this to work; `Joint-Use-Permits`' `create_layers.py`
-/ `add_messages_table.py` print the right values.
+`SMTP_HOST` blank disables sending entirely: a warning is logged and the
+caller's request still succeeds, so this doesn't become a hard dependency
+before an SMTP relay is provisioned. `CITY_NOTIFICATION_EMAIL` is unused
+by this service (Joint-Use-External's PHP backend has its own copy of
+this setting for the contractor -> city direction).
 
 ## Running it
 
@@ -184,11 +145,10 @@ and its `.safetensors` weights, with `model_type` `qwen3_vl`.
 
 ```text
 app/
-├── main.py                       FastAPI app: POST /jobs, GET /jobs/{id}, /external/*, /notify-message
+├── main.py                       FastAPI app: POST /jobs, GET /jobs/{id}, /notify-message
 ├── config.py                      environment-driven settings (see .env.example)
 ├── job_store.py                   in-memory job tracking (single-process only)
 ├── permit_creation.py             work-area geometry, permit numbering, feature creation
-├── messaging.py                   contractor <-> city messaging (Joint-Use-External's only way in)
 ├── email_service.py               best-effort "new message" notification email (smtplib)
 ├── gis_connection.py               cached ArcGIS Portal connection
 └── discovery/
@@ -233,15 +193,7 @@ app/
    evidence rules correctly hold ambiguous/incomplete readings back from
    being accepted, but nothing currently exposes them for a human to
    review and confirm -- they're just excluded from the final pole list.
-9. **The messaging API's only auth is a bearer token, never run
-   end-to-end.** `/external/*` trusts whatever's in `X-Contractor-Token`
-   with no rate limiting, no HTTPS enforcement, and no way to revoke a
-   token short of editing the Contractors table by hand -- combined with
-   `ALLOWED_ORIGINS=*` (#5), this needs real hardening before it's
-   reachable from outside your own network. Also never actually run
-   against a live service, same caveat as #1.
-10. **Email untested against a real SMTP relay.** `email_service.py`
-    hasn't been run against a real server -- confirm `SMTP_HOST` etc. are
-    correct and the notification actually lands before depending on it.
-11. **Uploaded message attachments aren't cleaned up either**, same as #7
-    (`UPLOAD_DIR/messages/...`).
+9. **Email untested against a real SMTP relay.** `email_service.py`
+   hasn't been run against a real server -- confirm `SMTP_HOST` etc. are
+   correct and `POST /notify-message` actually lands an email before
+   depending on it.

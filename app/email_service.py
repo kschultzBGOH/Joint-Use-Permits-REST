@@ -1,11 +1,13 @@
 """Sends the "you have a new message" notification email.
 
-Every message send (see messaging.py) notifies whoever didn't write it --
-a contractor's message emails CITY_NOTIFICATION_EMAIL, a city reply emails
-that thread's contractor. Failing to send never blocks the message itself
-from being saved: email is a courtesy, not the record of truth (the
-Messages table is), so a bad SMTP relay or an unset config shouldn't make
-messaging itself unusable.
+Used by POST /notify-message, called by the internal Joint-Use-Permits
+widget right after a city reply is written directly to the Messages
+table -- this is the contractor-notification half only; the other
+direction (a contractor's message notifying city staff) is handled by
+Joint-Use-External's own PHP backend, not this service. Failing to send
+never blocks the message itself from being saved: email is a courtesy,
+not the record of truth (the Messages table is), so a bad SMTP relay or
+an unset config shouldn't make replying itself unusable.
 """
 
 from __future__ import annotations

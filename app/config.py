@@ -99,20 +99,18 @@ ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
 #   layer 0 = WorkAreas             (permit record + boundary polygon)
 #   layer 1 = Poles                 (related to a permit via permit_globalid)
 #   table 2 = PermitNumberSequence  (single running counter -- see generate_permit_number)
-#   table 3 = Contractors           (read here too now -- see messaging.py's token lookup)
-#   table 4 = SubContractors        (not used by this service -- the widget reads it directly)
-#   table 5 = Messages              (contractor <-> city messages -- see messaging.py)
+#   table 3 = Contractors           (not used by this service -- Joint-Use-Permits'
+#                                     widget reads it directly; Joint-Use-External's
+#                                     PHP backend reads/writes it for contractor tokens)
+#   table 4 = SubContractors        (not used by this service either)
+#   table 5 = Messages              (not used by this service -- see table 3's note)
 SERVICE_ITEM_ID = _env("SERVICE_ITEM_ID")
 WORK_AREAS_LAYER_INDEX = _env_int("WORK_AREAS_LAYER_INDEX", 0)
 POLES_LAYER_INDEX = _env_int("POLES_LAYER_INDEX", 1)
 # Index within item.tables (a separate collection from item.layers), not
-# the ids above -- those are each table's continuous position in the
+# the id above -- that's this table's continuous position in the
 # service's combined layer+table numbering, used only for the REST URL.
-# Tables land in item.tables in the same order they were added in (id
-# order here): PermitNumberSequence, Contractors, SubContractors, Messages.
 PERMIT_NUMBER_SEQUENCE_TABLE_INDEX = _env_int("PERMIT_NUMBER_SEQUENCE_TABLE_INDEX", 0)
-CONTRACTORS_TABLE_INDEX = _env_int("CONTRACTORS_TABLE_INDEX", 1)
-MESSAGES_TABLE_INDEX = _env_int("MESSAGES_TABLE_INDEX", 3)
 
 # Matches scripts/create_layers.py's WKID in the Joint-Use-Permits repo
 # (NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet). The pole catalog's x/y
@@ -130,13 +128,15 @@ WORK_AREA_BUFFER_FEET = _env_int("WORK_AREA_BUFFER_FEET", 50)
 POLE_REVIEW_CONFIDENCE_THRESHOLD = _env_float("POLE_REVIEW_CONFIDENCE_THRESHOLD", 0.85)
 
 # ---------------------------------------------------------------------------
-# Email (app/email_service.py) -- every message send notifies "the other
-# side": a contractor's message emails CITY_NOTIFICATION_EMAIL, and a city
-# reply emails that thread's contractor (looked up from Contractors.email).
+# Email (app/email_service.py) -- POST /notify-message calls this to tell a
+# contractor about a new city reply. The other direction (a contractor's
+# message notifying city staff) isn't this service's concern -- see
+# Joint-Use-External's own PHP backend, which has its own copy of this
+# same SMTP config for that direction.
 # ---------------------------------------------------------------------------
 
 # Blank SMTP_HOST disables sending entirely -- email_service logs a warning
-# and moves on rather than raising, so messaging still works end-to-end
+# and moves on rather than raising, so /notify-message still succeeds
 # before an SMTP relay is provisioned.
 SMTP_HOST = _env("SMTP_HOST")
 SMTP_PORT = _env_int("SMTP_PORT", 587)
@@ -146,8 +146,6 @@ SMTP_PASSWORD = _env("SMTP_PASSWORD")
 # port (465) or an internal relay with no TLS at all.
 SMTP_USE_TLS = _env("SMTP_USE_TLS", "true").strip().lower() not in ("false", "0", "no")
 SMTP_FROM_ADDRESS = _env("SMTP_FROM_ADDRESS", "noreply@example.gov")
-
-CITY_NOTIFICATION_EMAIL = _env("CITY_NOTIFICATION_EMAIL")
 
 # ---------------------------------------------------------------------------
 # Server
