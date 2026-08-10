@@ -28,6 +28,24 @@ Project Scope" screen to fill in by hand.
 For someone with no plan set PDF to upload at all: skips discovery
 entirely rather than making a PDF upload mandatory just to reach the
 screen where poles get added by hand anyway.
+
+Also implements the contractor-facing messaging API behind the
+Joint-Use-External widget (app/messaging.py). A contractor has no Portal
+account, so these are the ONLY way they read or write anything -- every
+one of them takes an X-Contractor-Token header and is scoped to whichever
+contractor that token resolves to:
+
+    POST /external/threads                 start a request with no permit yet
+    GET  /external/threads                  this contractor's own threads
+    GET  /external/threads/{id}             one thread's messages (marks read)
+    POST /external/threads/{id}/messages    reply on a thread
+    GET  /external/threads/{id}/messages/{objectId}/attachments
+    GET  /external/threads/{id}/messages/{objectId}/attachments/{attachmentId}
+
+POST /notify-message is separate: the internal Joint-Use-Permits widget
+edits the Messages table directly (trusted Portal users, no token), and
+calls this afterward just to send the "you have a new message" email --
+see email_service.py.
 """
 
 from __future__ import annotations
@@ -36,12 +54,15 @@ import logging
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
-from . import config
+from . import config, email_service
 from .discovery.pipeline import DiscoveryError, discover_poles
 from .job_store import job_store
+from .messaging import MessagingError
+from . import messaging
 from .permit_creation import PermitCreationError, create_permit_and_poles
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
@@ -86,6 +107,11 @@ def log_resolved_config() -> None:
     logger.info("  POLE_DB_PATH=%s (exists=%s)", config.POLE_DB_PATH, config.POLE_DB_PATH.exists())
     logger.info("  POLE_TABLE=%s, POLE_ID_COLUMN=%s", config.POLE_TABLE, config.POLE_ID_COLUMN)
     logger.info("  QWEN_MODEL_DIR=%s", config.QWEN_MODEL_DIR)
+    logger.info(
+        "  SMTP_HOST=%s, CITY_NOTIFICATION_EMAIL=%s",
+        config.SMTP_HOST or "(unset -- message notifications will only be logged)",
+        config.CITY_NOTIFICATION_EMAIL or "(unset)",
+    )
 
 
 @app.get("/health")
@@ -203,3 +229,105 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
     except Exception as exc:  # noqa: BLE001 -- surface unexpected failures to the caller too
         logger.exception("Job %s failed unexpectedly.", job_id)
         job_store.set_failed(job_id, f"Unexpected error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Joint-Use-External: contractor-facing messaging (see app/messaging.py)
+# ---------------------------------------------------------------------------
+
+
+async def _save_optional_attachment(subdir: str, file: UploadFile | None) -> Path | None:
+    if file is None or not file.filename:
+        return None
+
+    directory = config.UPLOAD_DIR / "messages" / subdir
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / file.filename
+    path.write_bytes(await file.read())
+    return path
+
+
+@app.post("/external/threads", status_code=201)
+async def external_start_thread(
+    x_contractor_token: str = Header(...),
+    body: str = Form(...),
+    file: UploadFile | None = File(None),
+) -> dict:
+    try:
+        attachment_path = await _save_optional_attachment(messaging.new_local_id(), file)
+        return messaging.start_thread(x_contractor_token, body, attachment_path)
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/external/threads")
+def external_list_threads(x_contractor_token: str = Header(...)) -> dict:
+    try:
+        return {"threads": messaging.list_threads(x_contractor_token)}
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/external/threads/{thread_id}")
+def external_get_thread(thread_id: str, x_contractor_token: str = Header(...)) -> dict:
+    try:
+        return messaging.get_thread(x_contractor_token, thread_id)
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/external/threads/{thread_id}/messages", status_code=201)
+async def external_reply(
+    thread_id: str,
+    x_contractor_token: str = Header(...),
+    body: str = Form(...),
+    file: UploadFile | None = File(None),
+) -> dict:
+    try:
+        attachment_path = await _save_optional_attachment(messaging.new_local_id(), file)
+        return messaging.reply_to_thread(x_contractor_token, thread_id, body, attachment_path)
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/external/threads/{thread_id}/messages/{message_object_id}/attachments")
+def external_list_attachments(
+    thread_id: str, message_object_id: int, x_contractor_token: str = Header(...)
+) -> dict:
+    try:
+        return {"attachments": messaging.list_attachments(x_contractor_token, thread_id, message_object_id)}
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/external/threads/{thread_id}/messages/{message_object_id}/attachments/{attachment_id}")
+def external_download_attachment(
+    thread_id: str,
+    message_object_id: int,
+    attachment_id: int,
+    x_contractor_token: str = Header(...),
+) -> FileResponse:
+    try:
+        dest_dir = config.UPLOAD_DIR / "messages" / "downloads" / str(message_object_id)
+        path = messaging.download_attachment(
+            x_contractor_token, thread_id, message_object_id, attachment_id, dest_dir
+        )
+    except MessagingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(path, filename=path.name)
+
+
+@app.post("/notify-message")
+def notify_message(payload: dict) -> dict:
+    """Called by the internal Joint-Use-Permits widget right after it
+    writes a city reply directly to the Messages table -- this only sends
+    the email, it never touches ArcGIS. `payload`: contractorEmail
+    (required, the recipient), permitNumber (optional), body.
+    """
+
+    to_address = str(payload.get("contractorEmail") or "")
+    body = str(payload.get("body") or "")
+    permit_number = payload.get("permitNumber")
+
+    email_service.send_message_notification(to_address, "City staff", body, permit_number)
+    return {"status": "ok"}
