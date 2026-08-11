@@ -163,9 +163,8 @@ and its `.safetensors` weights, with `model_type` `qwen3_vl`.
 
 `requirements.txt` pins `arcgis~=2.4`, which installs from PyPI into any
 ordinary virtualenv -- no ArcGIS Pro, no conda, no Esri-specific Python
-distribution required, *unless* `ARCGIS_AUTH_MODE=pro` (see ".env.example"
-above). That's the only one of the three auth modes that needs Pro/arcpy
-at all; `credentials` (recommended) or `profile` avoid it entirely.
+distribution required, under either supported `ARCGIS_AUTH_MODE` (see
+".env.example" above).
 
 ## File layout
 

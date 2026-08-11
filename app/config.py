@@ -102,23 +102,21 @@ API_KEY = _env("API_KEY")
 # ArcGIS Portal
 # ---------------------------------------------------------------------------
 
-# How this service itself authenticates to Portal to create/query features:
-#   pro:         the active portal signed into ArcGIS Pro. Requires ArcGIS
-#                Pro installed AND signed in on this machine, and this
-#                service running inside Pro's own Python/conda environment
-#                (arcpy and friends) -- the only one of these three modes
-#                with that requirement.
-#   profile:     a saved ArcGIS API for Python profile (set ARCGIS_PROFILE).
-#                No Pro/arcpy needed, but the profile has to be created once
-#                interactively on this machine first (GIS(url, username,
-#                password, profile="...")) before this service can use it.
+# How this service itself authenticates to Portal to create/query features.
+# Both talk to Portal purely over REST via the `arcgis` package's PyPI
+# wheel -- no ArcGIS Pro, no arcpy, no special conda environment needed for
+# either. (An earlier "pro" mode, borrowing ArcGIS Pro's own signed-in
+# session, has been removed -- see gis_connection.py's docstring for why.)
 #   credentials: ARCGIS_URL/ARCGIS_USERNAME/ARCGIS_PASSWORD below, straight
-#                to Portal's own token endpoint over plain HTTP(S). No Pro,
-#                no arcpy, no interactive setup -- the `arcgis` package
-#                installs from PyPI into any ordinary virtualenv for this
-#                mode; a dedicated service account is all it needs. This is
-#                the recommended mode for a server deployment.
-ARCGIS_AUTH_MODE = _env("ARCGIS_AUTH_MODE", "pro")
+#                to Portal's own token endpoint. No interactive setup --
+#                just a dedicated service account. Recommended default.
+#   profile:     a saved ArcGIS API for Python profile (set ARCGIS_PROFILE).
+#                The profile has to be created once interactively on this
+#                machine first (GIS(url, username, password,
+#                profile="...")) before this service can use it -- only
+#                worth it over "credentials" if you'd rather not put a
+#                plaintext password in .env at all.
+ARCGIS_AUTH_MODE = _env("ARCGIS_AUTH_MODE", "credentials")
 ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
 
 # Used only when ARCGIS_AUTH_MODE=credentials.
