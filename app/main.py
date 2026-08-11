@@ -95,9 +95,8 @@ def log_resolved_config() -> None:
     logger.info("  POLE_TABLE=%s, POLE_ID_COLUMN=%s", config.POLE_TABLE, config.POLE_ID_COLUMN)
     logger.info("  QWEN_MODEL_DIR=%s", config.QWEN_MODEL_DIR)
     logger.info(
-        "  SMTP_HOST=%s, CITY_NOTIFICATION_EMAIL=%s",
+        "  SMTP_HOST=%s",
         config.SMTP_HOST or "(unset -- message notifications will only be logged)",
-        config.CITY_NOTIFICATION_EMAIL or "(unset)",
     )
 
 
