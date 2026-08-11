@@ -21,6 +21,13 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
+def _single_line(value: str) -> str:
+    """Collapses embedded newlines so a value can go straight into a
+    header -- see send_message_notification's Subject line."""
+
+    return " ".join(str(value).splitlines()).strip()
+
+
 def send_message_notification(
     to_address: str,
     sender_label: str,
@@ -42,7 +49,11 @@ def send_message_notification(
         )
         return
 
-    subject = f"New message on permit {permit_number}" if permit_number else "New message on your request"
+    # permit_number/sender_label ultimately trace back to a request body
+    # (POST /notify-message's payload) -- strip CR/LF before they reach a
+    # header value so nobody can fold in extra headers via a crafted value.
+    safe_permit_number = _single_line(permit_number) if permit_number else None
+    subject = f"New message on permit {safe_permit_number}" if safe_permit_number else "New message on your request"
 
     message = EmailMessage()
     message["Subject"] = subject

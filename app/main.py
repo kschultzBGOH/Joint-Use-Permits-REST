@@ -41,10 +41,11 @@ directly rather than through here.
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config, email_service
@@ -65,6 +66,24 @@ app.add_middleware(
 )
 
 
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Gate for every endpoint that creates permits, runs discovery jobs, or
+    sends email -- the internal Joint-Use-Permits widget is this service's
+    only intended caller (see main.py's module docstring), so one shared
+    secret is enough; there's no separate per-user identity to check.
+
+    config.API_KEY blank means the check is off entirely -- log_resolved_config
+    warns loudly about that at startup so it's never silently the case in
+    production. secrets.compare_digest avoids leaking the real key's length/
+    contents through response-timing differences.
+    """
+
+    if not config.API_KEY:
+        return
+    if not x_api_key or not secrets.compare_digest(x_api_key, config.API_KEY):
+        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header.")
+
+
 @app.on_event("startup")
 def log_resolved_config() -> None:
     """Logs the settings actually in effect.
@@ -83,6 +102,15 @@ def log_resolved_config() -> None:
             config.ENV_FILE,
         )
 
+    if config.API_KEY:
+        logger.info("  API_KEY=(set, %s chars)", len(config.API_KEY))
+    else:
+        logger.warning(
+            "  API_KEY is unset -- /jobs, /permits, and /notify-message are running with NO "
+            "AUTHENTICATION. Anyone who can reach this service can create permits or send "
+            "email through it. Set API_KEY in .env before this is reachable from anywhere but "
+            "your own machine."
+        )
     logger.info("  ARCGIS_AUTH_MODE=%s", config.ARCGIS_AUTH_MODE)
     logger.info("  ARCGIS_PROFILE=%s", config.ARCGIS_PROFILE or "(unset)")
     logger.info(
@@ -105,7 +133,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/jobs", status_code=202)
+@app.post("/jobs", status_code=202, dependencies=[Depends(require_api_key)])
 async def create_job(file: UploadFile) -> dict:
     job = job_store.create()
 
@@ -129,7 +157,7 @@ def _serialize_permit(permit) -> dict:
     }
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_api_key)])
 def get_job(job_id: str) -> dict:
     job = job_store.get(job_id)
     if job is None:
@@ -147,7 +175,7 @@ def get_job(job_id: str) -> dict:
     return {"status": "failed", "error": job.error}
 
 
-@app.post("/permits", status_code=201)
+@app.post("/permits", status_code=201, dependencies=[Depends(require_api_key)])
 def create_empty_permit() -> dict:
     """Creates a permit with no discovered poles, synchronously (no PDF to
     process, so no job/polling needed) -- for someone with no plan set to
@@ -222,7 +250,7 @@ def _process_job(job_id: str, pdf_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.post("/notify-message")
+@app.post("/notify-message", dependencies=[Depends(require_api_key)])
 def notify_message(payload: dict) -> dict:
     """Called by the internal Joint-Use-Permits widget right after it
     writes a city reply directly to the Messages table -- this only sends

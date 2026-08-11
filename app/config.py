@@ -85,13 +85,46 @@ MINIMUM_CANDIDATE_CONFIDENCE = _env_float("MINIMUM_CANDIDATE_CONFIDENCE", 0.80)
 MAX_PDF_MB = _env_int("MAX_PDF_MB", 500)
 
 # ---------------------------------------------------------------------------
+# API auth -- protects THIS service's own endpoints (called by the internal
+# Joint-Use-Permits widget). Separate from, and unrelated to, the ArcGIS
+# Portal connection below -- this is about who may call /jobs, /permits,
+# and /notify-message; that's about how this service itself talks to
+# Portal.
+# ---------------------------------------------------------------------------
+
+# Shared secret the caller (the widget) must send as `X-API-Key` on every
+# protected request. Blank disables the check entirely -- see main.py's
+# startup log, which warns loudly when that's the case. Generate one with:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+API_KEY = _env("API_KEY")
+
+# ---------------------------------------------------------------------------
 # ArcGIS Portal
 # ---------------------------------------------------------------------------
 
-# "pro" uses the active portal signed into ArcGIS Pro; "profile" uses a
-# saved ArcGIS API for Python profile.
+# How this service itself authenticates to Portal to create/query features:
+#   pro:         the active portal signed into ArcGIS Pro. Requires ArcGIS
+#                Pro installed AND signed in on this machine, and this
+#                service running inside Pro's own Python/conda environment
+#                (arcpy and friends) -- the only one of these three modes
+#                with that requirement.
+#   profile:     a saved ArcGIS API for Python profile (set ARCGIS_PROFILE).
+#                No Pro/arcpy needed, but the profile has to be created once
+#                interactively on this machine first (GIS(url, username,
+#                password, profile="...")) before this service can use it.
+#   credentials: ARCGIS_URL/ARCGIS_USERNAME/ARCGIS_PASSWORD below, straight
+#                to Portal's own token endpoint over plain HTTP(S). No Pro,
+#                no arcpy, no interactive setup -- the `arcgis` package
+#                installs from PyPI into any ordinary virtualenv for this
+#                mode; a dedicated service account is all it needs. This is
+#                the recommended mode for a server deployment.
 ARCGIS_AUTH_MODE = _env("ARCGIS_AUTH_MODE", "pro")
 ARCGIS_PROFILE = _env("ARCGIS_PROFILE")
+
+# Used only when ARCGIS_AUTH_MODE=credentials.
+ARCGIS_URL = _env("ARCGIS_URL")
+ARCGIS_USERNAME = _env("ARCGIS_USERNAME")
+ARCGIS_PASSWORD = _env("ARCGIS_PASSWORD")
 
 # Portal item ID of the JointUsePermits hosted feature service, which holds
 # BOTH related layers AND several reference tables (see

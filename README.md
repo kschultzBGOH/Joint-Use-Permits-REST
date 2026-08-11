@@ -107,14 +107,34 @@ you're adding this table to an already-live service, run
 `Joint-Use-Permits/scripts/add_permit_number_sequence.py` instead, which
 prints it too.
 
+## Securing this service (`API_KEY`)
+
+Every endpoint except `/health` requires an `X-API-Key` header matching
+`API_KEY` in `.env` -- checked in `main.py`'s `require_api_key` dependency
+with a constant-time comparison. The internal `Joint-Use-Permits` widget
+is this service's only intended caller (see the module docstring above and
+"Notifying a contractor by email" below), so one shared secret is enough;
+there's no per-user identity to check here. Set the widget's own "REST API
+key" setting to the same value.
+
+Leaving `API_KEY` blank disables the check entirely -- every request goes
+through unauthenticated. That's still supported for quick local testing,
+but `log_resolved_config` logs a loud warning on every startup when it's
+blank specifically so this can't happen silently in production. Generate
+one with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
 ## Notifying a contractor by email (`app/email_service.py`)
 
-`POST /notify-message` has no auth of its own -- it's called only by the
-internal `Joint-Use-Permits` widget, right after it writes a city reply
-directly to the Messages table itself (trusted Portal users, direct
-`applyEdits`). This endpoint doesn't touch ArcGIS at all; it only sends
-the "you have a new message" email. `{contractorEmail, permitNumber?,
-body}`.
+`POST /notify-message` is gated by `API_KEY` like every other endpoint
+here (see above) -- it's called only by the internal `Joint-Use-Permits`
+widget, right after it writes a city reply directly to the Messages table
+itself (trusted Portal users, direct `applyEdits`). This endpoint doesn't
+touch ArcGIS at all; it only sends the "you have a new message" email.
+`{contractorEmail, permitNumber?, body}`.
 
 This service has no other involvement in contractor <-> city messaging.
 The contractor-facing side (`Joint-Use-External`) has its own PHP backend
@@ -132,7 +152,7 @@ this setting for the contractor -> city direction).
 
 ```bash
 pip install -r requirements.txt   # install torch separately first -- see requirements.txt
-cp .env.example .env               # fill in POLE_DB_PATH, QWEN_MODEL_DIR, etc.
+cp .env.example .env               # fill in POLE_DB_PATH, QWEN_MODEL_DIR, API_KEY, etc.
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -140,6 +160,12 @@ CUDA is required for the visual pass -- `vision_model.py` refuses to load
 the model on CPU by default (`require_cuda=True`). `QWEN_MODEL_DIR` must
 contain `config.json`, `preprocessor_config.json`, `tokenizer_config.json`,
 and its `.safetensors` weights, with `model_type` `qwen3_vl`.
+
+`requirements.txt` pins `arcgis~=2.4`, which installs from PyPI into any
+ordinary virtualenv -- no ArcGIS Pro, no conda, no Esri-specific Python
+distribution required, *unless* `ARCGIS_AUTH_MODE=pro` (see ".env.example"
+above). That's the only one of the three auth modes that needs Pro/arcpy
+at all; `credentials` (recommended) or `profile` avoid it entirely.
 
 ## File layout
 
@@ -181,7 +207,10 @@ app/
    balancer or multiple workers.
 5. **`ALLOWED_ORIGINS` defaults to `*`.** Lock this down to the actual
    Experience Builder app's origin before this is reachable from
-   anywhere untrusted.
+   anywhere untrusted. (Endpoint auth is now handled by `API_KEY` --
+   see "Securing this service" above -- but CORS is a separate,
+   still-open item: it controls which *browser origins* may call this
+   API at all, regardless of whether they'd pass the key.)
 6. **Layer index 0 assumed** for both hosted feature services, matching
    `create_layers.py`.
 7. **Uploaded PDFs and rendered page images aren't cleaned up.** They
